@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "TaskAgent",
+    "slug": "taskagent",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "taskagent",
+    "userInterfaceStyle": "automatic",
+    "plugins": [
+      "expo-document-picker",
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": false,
+          "microphonePermission": false,
+          "photosPermission": "TaskAgent, profil görseli seçebilmen için fotoğraf arşivini kullanır."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "taskagent-reminders"
+        }
+      ]
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.taskagent.mobile",
+      "config": {
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSUserNotificationUsageDescription": "TaskAgent, seçtiğin görev hatırlatmalarını gönderir."
+      }
+    },
+    "android": {
+      "package": "com.taskagent.mobile",
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
+      "permissions": [
+        "android.permission.POST_NOTIFICATIONS"
+      ]
+    },
+    "extra": {
+      "legal": {
+        "accountDeletionUrl": "https://metinatilgan.github.io/TaskAgent/account-deletion.html",
+        "privacyPolicyUrl": "https://metinatilgan.github.io/TaskAgent/privacy.html",
+        "subscriptionTermsUrl": "https://metinatilgan.github.io/TaskAgent/subscription-terms.html",
+        "supportUrl": "https://metinatilgan.github.io/TaskAgent/support.html",
+        "termsOfUseUrl": "https://metinatilgan.github.io/TaskAgent/terms.html"
+      },
+      "eas": {
+        "projectId": "replace-with-eas-project-id"
+      }
+    }
+  }
+}
