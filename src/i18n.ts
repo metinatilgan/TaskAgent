@@ -167,6 +167,18 @@ export interface AppCopy {
     notifications: string;
     notificationsBody: string;
     notificationPermissionDenied: string;
+    deleteAccountBody: string;
+    deleteAccountCancel: string;
+    deleteAccountConfirmBody: string;
+    deleteAccountConfirmButton: string;
+    deleteAccountConfirmTitle: string;
+    deleteAccountFailure: string;
+    deleteAccountPasswordLabel: string;
+    deleteAccountPasswordRequired: string;
+    deleteAccountRecentLogin: string;
+    deleteAccountSuccessBody: string;
+    deleteAccountSuccessTitle: string;
+    deleteAccountWrongPassword: string;
     english: string;
     turkish: string;
     logout: string;
@@ -379,6 +391,19 @@ export const translations: Record<Language, AppCopy> = {
       notifications: "Bildirimler",
       notificationsBody: "Görev hatırlatmaları için cihaz bildirimlerini kullan.",
       notificationPermissionDenied: "Bildirim izni verilmedi. Cihaz ayarlarından TaskAgent bildirimlerini açman gerekiyor.",
+      deleteAccountBody:
+        "Hesabını silmek; profilini, görevlerini, alanlarını, alt görevlerini ve geçmişini kalıcı olarak siler. Apple aboneliğin varsa faturalandırma App Store üzerinden yönetilmeye devam eder; aboneliğini ayrıca iptal etmelisin.",
+      deleteAccountCancel: "Vazgeç",
+      deleteAccountConfirmBody: "Bu işlem geri alınamaz. TaskAgent hesabın ve uygulama verilerin kalıcı olarak silinecek.",
+      deleteAccountConfirmButton: "Kalıcı Olarak Sil",
+      deleteAccountConfirmTitle: "Hesabı sil?",
+      deleteAccountFailure: "Hesap silinemedi. Lütfen bağlantını kontrol edip tekrar dene.",
+      deleteAccountPasswordLabel: "Şifren",
+      deleteAccountPasswordRequired: "Hesabını silmek için şifreni yazmalısın.",
+      deleteAccountRecentLogin: "Güvenlik için tekrar giriş yapıp hesabı silmeyi yeniden dene.",
+      deleteAccountSuccessBody: "Hesabın ve TaskAgent verilerin silindi.",
+      deleteAccountSuccessTitle: "Hesap silindi",
+      deleteAccountWrongPassword: "Şifre hatalı. Lütfen tekrar dene.",
       english: "İngilizce",
       turkish: "Türkçe",
       logout: "Çıkış Yap"
@@ -587,6 +612,19 @@ export const translations: Record<Language, AppCopy> = {
       notifications: "Notifications",
       notificationsBody: "Use device notifications for task reminders.",
       notificationPermissionDenied: "Notification permission was denied. Turn on TaskAgent notifications in device settings.",
+      deleteAccountBody:
+        "Deleting your account permanently removes your profile, tasks, areas, subtasks, and history. If you have an Apple subscription, billing is still managed through the App Store and must be canceled separately.",
+      deleteAccountCancel: "Cancel",
+      deleteAccountConfirmBody: "This cannot be undone. Your TaskAgent account and app data will be permanently deleted.",
+      deleteAccountConfirmButton: "Delete Permanently",
+      deleteAccountConfirmTitle: "Delete account?",
+      deleteAccountFailure: "The account could not be deleted. Check your connection and try again.",
+      deleteAccountPasswordLabel: "Password",
+      deleteAccountPasswordRequired: "Enter your password to delete your account.",
+      deleteAccountRecentLogin: "For security, sign in again and retry account deletion.",
+      deleteAccountSuccessBody: "Your account and TaskAgent data were deleted.",
+      deleteAccountSuccessTitle: "Account deleted",
+      deleteAccountWrongPassword: "The password is incorrect. Please try again.",
       english: "English",
       turkish: "Turkish",
       logout: "Sign Out"

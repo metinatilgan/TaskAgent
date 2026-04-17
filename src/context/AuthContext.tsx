@@ -1,19 +1,26 @@
 import React, { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState } from "react";
 import {
+  EmailAuthProvider,
   User,
   createUserWithEmailAndPassword,
+  deleteUser,
   onAuthStateChanged,
+  reauthenticateWithCredential,
   sendPasswordResetEmail,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   updateProfile
 } from "firebase/auth";
 import { FirebaseError } from "firebase/app";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc, writeBatch } from "firebase/firestore";
 
 import { demoCategories, demoProfile } from "../data/demo";
 import { auth, db, isFirebaseConfigured } from "../lib/firebase";
 import { AppUser } from "../types";
+
+export type AccountDeletionFailureCode = "missing-password" | "wrong-password" | "recent-login-required" | "firebase-unavailable" | "failed";
+
+export type AccountDeletionResult = { ok: true } | { ok: false; code: AccountDeletionFailureCode };
 
 interface AuthContextValue {
   user: AppUser | null;
@@ -23,6 +30,7 @@ interface AuthContextValue {
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (email: string, password: string, fullName: string) => Promise<void>;
   sendPasswordReset: (email: string) => Promise<boolean>;
+  deleteAccount: (password: string) => Promise<AccountDeletionResult>;
   signOut: () => Promise<void>;
   clearError: () => void;
 }
@@ -145,6 +153,68 @@ async function createProfileIfNeeded(user: User, fullName?: string) {
   }
 }
 
+async function deleteCollectionDocuments(uid: string, collectionName: "categories" | "tasks") {
+  const firestore = db;
+
+  if (!firestore) {
+    return;
+  }
+
+  const snapshot = await getDocs(collection(firestore, "users", uid, collectionName));
+  let batch = writeBatch(firestore);
+  let operationCount = 0;
+
+  for (const item of snapshot.docs) {
+    batch.delete(item.ref);
+    operationCount += 1;
+
+    if (operationCount === 450) {
+      await batch.commit();
+      batch = writeBatch(firestore);
+      operationCount = 0;
+    }
+  }
+
+  if (operationCount > 0) {
+    await batch.commit();
+  }
+}
+
+async function deleteFirestoreAccountData(uid: string) {
+  const firestore = db;
+
+  if (!firestore) {
+    return;
+  }
+
+  await deleteCollectionDocuments(uid, "tasks");
+  await deleteCollectionDocuments(uid, "categories");
+
+  const batch = writeBatch(firestore);
+  batch.delete(doc(firestore, "users", uid));
+  await batch.commit();
+}
+
+const accountDeletionFailureCode = (cause: unknown): AccountDeletionFailureCode => {
+  if (!(cause instanceof FirebaseError)) {
+    return "failed";
+  }
+
+  if (cause.code === "auth/wrong-password" || cause.code === "auth/invalid-credential") {
+    return "wrong-password";
+  }
+
+  if (cause.code === "auth/missing-password") {
+    return "missing-password";
+  }
+
+  if (cause.code === "auth/requires-recent-login") {
+    return "recent-login-required";
+  }
+
+  return "failed";
+};
+
 export function AuthProvider({ children }: PropsWithChildren) {
   const [user, setUser] = useState<AppUser | null>(null);
   const [loading, setLoading] = useState(isFirebaseConfigured);
@@ -226,6 +296,35 @@ export function AuthProvider({ children }: PropsWithChildren) {
         } catch (cause) {
           setError(authErrorMessage(cause, "Şifre sıfırlama emaili gönderilemedi."));
           return false;
+        }
+      },
+      deleteAccount: async (password) => {
+        setError(null);
+
+        if (!auth || !db) {
+          return { ok: false, code: "firebase-unavailable" };
+        }
+
+        const currentUser = auth.currentUser;
+
+        if (!currentUser?.email) {
+          return { ok: false, code: "failed" };
+        }
+
+        if (!password.trim()) {
+          return { ok: false, code: "missing-password" };
+        }
+
+        try {
+          const credential = EmailAuthProvider.credential(currentUser.email, password);
+          await reauthenticateWithCredential(currentUser, credential);
+          await deleteFirestoreAccountData(currentUser.uid);
+          await deleteUser(currentUser);
+          setUser(null);
+          return { ok: true };
+        } catch (cause) {
+          console.warn("Account deletion failed.", cause);
+          return { ok: false, code: accountDeletionFailureCode(cause) };
         }
       },
       signOut: async () => {

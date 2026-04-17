@@ -19,7 +19,7 @@ import type { PurchasesOffering, PurchasesPackage } from "react-native-purchases
 
 import { BottomTabs, Button, Field, IconButton, MaterialIconName, Panel, PriorityBadge, ProgressBar, StatPill, TaskCard, TopBar } from "../components/ui";
 import { legalLinks } from "../config/legal";
-import { useAuth } from "../context/AuthContext";
+import { useAuth, type AccountDeletionFailureCode } from "../context/AuthContext";
 import { useTaskAgent } from "../context/TaskContext";
 import { AppCopy, getCopy } from "../i18n";
 import {
@@ -55,6 +55,73 @@ const openLegalLink = async (url: string, copy: AppCopy) => {
     Alert.alert(copy.legal.linkErrorTitle, copy.legal.linkErrorBody);
   }
 };
+
+const accountDeletionErrorMessage = (code: AccountDeletionFailureCode, copy: AppCopy) => {
+  if (code === "missing-password") {
+    return copy.settings.deleteAccountPasswordRequired;
+  }
+
+  if (code === "wrong-password") {
+    return copy.settings.deleteAccountWrongPassword;
+  }
+
+  if (code === "recent-login-required") {
+    return copy.settings.deleteAccountRecentLogin;
+  }
+
+  return copy.settings.deleteAccountFailure;
+};
+
+function AccountDeletionPanel({ copy }: { copy: AppCopy }) {
+  const { deleteAccount } = useAuth();
+  const [expanded, setExpanded] = useState(false);
+  const [password, setPassword] = useState("");
+  const [deleting, setDeleting] = useState(false);
+
+  const performDelete = async () => {
+    setDeleting(true);
+    const result = await deleteAccount(password);
+    setDeleting(false);
+
+    if (result.ok) {
+      Alert.alert(copy.settings.deleteAccountSuccessTitle, copy.settings.deleteAccountSuccessBody);
+      return;
+    }
+
+    Alert.alert(copy.legal.accountDeletion, accountDeletionErrorMessage(result.code, copy));
+  };
+
+  const confirmDelete = () => {
+    if (!password.trim()) {
+      Alert.alert(copy.legal.accountDeletion, copy.settings.deleteAccountPasswordRequired);
+      return;
+    }
+
+    Alert.alert(copy.settings.deleteAccountConfirmTitle, copy.settings.deleteAccountConfirmBody, [
+      { text: copy.settings.deleteAccountCancel, style: "cancel" },
+      {
+        text: copy.settings.deleteAccountConfirmButton,
+        style: "destructive",
+        onPress: () => {
+          void performDelete();
+        }
+      }
+    ]);
+  };
+
+  if (!expanded) {
+    return <Button label={copy.legal.accountDeletion} icon="delete-forever" variant="danger" onPress={() => setExpanded(true)} />;
+  }
+
+  return (
+    <View style={styles.stackSmall}>
+      <Text style={styles.settingBody}>{copy.settings.deleteAccountBody}</Text>
+      <Field label={copy.settings.deleteAccountPasswordLabel} value={password} onChangeText={setPassword} secureTextEntry textContentType="password" />
+      <Button label={copy.settings.deleteAccountConfirmButton} icon="delete-forever" variant="danger" loading={deleting} disabled={deleting} onPress={confirmDelete} />
+      <Button label={copy.settings.deleteAccountCancel} icon="close" variant="ghost" disabled={deleting} onPress={() => setExpanded(false)} />
+    </View>
+  );
+}
 
 export function RootNavigator() {
   const { user, loading } = useAuth();
@@ -707,7 +774,7 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
         </View>
         <Button label={copy.legal.subscriptionTerms} icon="workspace-premium" variant="secondary" onPress={() => openLegalLink(legalLinks.subscriptionTerms, copy)} />
         <Button label={copy.legal.support} icon="support-agent" variant="ghost" onPress={() => openLegalLink(legalLinks.support, copy)} />
-        <Button label={copy.legal.accountDeletion} icon="delete-forever" variant="danger" onPress={() => openLegalLink(legalLinks.accountDeletion, copy)} />
+        <AccountDeletionPanel copy={copy} />
       </Panel>
 
       <View style={styles.featureGrid}>
@@ -779,7 +846,7 @@ function SettingsScreen({ copy, onOpenPremium }: { copy: AppCopy; onOpenPremium:
         <Button label={copy.legal.termsOfUse} icon="article" variant="ghost" onPress={() => openLegalLink(legalLinks.terms, copy)} />
         <Button label={copy.legal.subscriptionTerms} icon="workspace-premium" variant="ghost" onPress={() => openLegalLink(legalLinks.subscriptionTerms, copy)} />
         <Button label={copy.legal.support} icon="support-agent" variant="ghost" onPress={() => openLegalLink(legalLinks.support, copy)} />
-        <Button label={copy.legal.accountDeletion} icon="delete-forever" variant="danger" onPress={() => openLegalLink(legalLinks.accountDeletion, copy)} />
+        <AccountDeletionPanel copy={copy} />
       </Panel>
 
       <Button label={copy.settings.logout} icon="logout" variant="danger" onPress={signOut} />
