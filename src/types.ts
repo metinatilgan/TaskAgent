@@ -11,7 +11,6 @@ export interface UserProfile {
   jobTitle: string;
   language: "en" | "tr";
   pushNotifications: boolean;
-  darkMode: boolean;
   isPremium: boolean;
   premiumPlan: "monthly" | "yearly" | null;
   premiumExpiresAt: string | null;
@@ -34,22 +33,6 @@ export interface Subtask {
   isCompleted: boolean;
   sortOrder: number;
   createdAt: string;
-}
-
-export interface Attachment {
-  id: string;
-  fileUrl: string;
-  fileName: string;
-  fileType: string;
-  storagePath: string;
-  createdAt: string;
-}
-
-export interface PickedFile {
-  uri: string;
-  name: string;
-  mimeType?: string;
-  size?: number;
 }
 
 export interface TaskHistoryEntry {
@@ -78,15 +61,13 @@ export interface Task {
   lastDailyRefresh: string | null;
   notificationId?: string | null;
   subtasks: Subtask[];
-  attachments: Attachment[];
   completionHistory: TaskHistoryEntry[];
   createdAt: string;
   updatedAt: string;
 }
 
-export type TaskDraft = Omit<Task, "id" | "createdAt" | "updatedAt" | "subtasks" | "attachments" | "completionHistory" | "lastDailyRefresh"> & {
+export type TaskDraft = Omit<Task, "id" | "createdAt" | "updatedAt" | "subtasks" | "completionHistory" | "lastDailyRefresh"> & {
   subtasks?: Subtask[];
-  attachments?: Attachment[];
   completionHistory?: TaskHistoryEntry[];
   lastDailyRefresh?: string | null;
 };

@@ -3,6 +3,13 @@ import * as Notifications from "expo-notifications";
 
 import { Task, TaskDraft } from "../types";
 
+export class NotificationPermissionDeniedError extends Error {
+  constructor() {
+    super("Notification permission was denied.");
+    this.name = "NotificationPermissionDeniedError";
+  }
+}
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldPlaySound: true,
@@ -27,6 +34,22 @@ function notificationDateForTask(task: Pick<Task | TaskDraft, "dueDate" | "dueTi
   return scheduledAt;
 }
 
+export const isNotificationPermissionDeniedError = (cause: unknown) => cause instanceof NotificationPermissionDeniedError;
+
+export async function requestTaskNotificationPermission() {
+  const existingPermission = await Notifications.getPermissionsAsync();
+
+  if (existingPermission.granted) {
+    return;
+  }
+
+  const permission = await Notifications.requestPermissionsAsync();
+
+  if (!permission.granted) {
+    throw new NotificationPermissionDeniedError();
+  }
+}
+
 export async function scheduleTaskReminder(task: Pick<Task | TaskDraft, "title" | "dueDate" | "dueTime" | "reminderTime">) {
   const scheduledAt = notificationDateForTask(task);
 
@@ -34,11 +57,7 @@ export async function scheduleTaskReminder(task: Pick<Task | TaskDraft, "title" 
     return null;
   }
 
-  const permission = await Notifications.requestPermissionsAsync();
-
-  if (!permission.granted) {
-    return null;
-  }
+  await requestTaskNotificationPermission();
 
   if (Platform.OS === "android") {
     await Notifications.setNotificationChannelAsync("taskagent-reminders", {
@@ -66,4 +85,8 @@ export async function cancelTaskReminder(notificationId?: string | null) {
   }
 
   await Notifications.cancelScheduledNotificationAsync(notificationId);
+}
+
+export async function cancelAllTaskReminders(notificationIds: Array<string | null | undefined>) {
+  await Promise.all(notificationIds.filter((notificationId): notificationId is string => Boolean(notificationId)).map(cancelTaskReminder));
 }

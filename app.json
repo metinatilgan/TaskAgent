@@ -4,18 +4,10 @@
     "slug": "taskagent",
     "version": "0.1.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "scheme": "taskagent",
     "userInterfaceStyle": "automatic",
     "plugins": [
-      "expo-document-picker",
-      [
-        "expo-image-picker",
-        {
-          "cameraPermission": false,
-          "microphonePermission": false,
-          "photosPermission": "TaskAgent, profil görseli seçebilmen için fotoğraf arşivini kullanır."
-        }
-      ],
       [
         "expo-notifications",
         {
@@ -35,6 +27,10 @@
     },
     "android": {
       "package": "com.taskagent.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#FFFFFF"
+      },
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO"
       ],

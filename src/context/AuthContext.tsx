@@ -9,7 +9,7 @@ import {
   updateProfile
 } from "firebase/auth";
 import { FirebaseError } from "firebase/app";
-import { addDoc, collection, doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
 
 import { demoCategories, demoProfile } from "../data/demo";
 import { auth, db, isFirebaseConfigured } from "../lib/firebase";
@@ -22,29 +22,25 @@ interface AuthContextValue {
   isFirebaseReady: boolean;
   signInWithEmail: (email: string, password: string) => Promise<void>;
   signUpWithEmail: (email: string, password: string, fullName: string) => Promise<void>;
-  sendPasswordReset: (email: string) => Promise<void>;
-  signInDemo: () => void;
+  sendPasswordReset: (email: string) => Promise<boolean>;
   signOut: () => Promise<void>;
   clearError: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+const displayNameForUser = (user: User) =>
+  user.displayName || user.providerData.find((provider) => provider.displayName)?.displayName || null;
+
+const photoUrlForUser = (user: User) => user.photoURL || user.providerData.find((provider) => provider.photoURL)?.photoURL || null;
+
 const toAppUser = (user: User): AppUser => ({
   uid: user.uid,
   email: user.email,
-  displayName: user.displayName,
-  photoURL: user.photoURL,
+  displayName: displayNameForUser(user),
+  photoURL: photoUrlForUser(user),
   isDemo: false
 });
-
-const demoUser: AppUser = {
-  uid: demoProfile.uid,
-  email: demoProfile.email,
-  displayName: demoProfile.fullName,
-  photoURL: null,
-  isDemo: true
-};
 
 const authErrorMessage = (cause: unknown, fallback: string) => {
   if (!(cause instanceof FirebaseError)) {
@@ -52,10 +48,12 @@ const authErrorMessage = (cause: unknown, fallback: string) => {
   }
 
   const messages: Record<string, string> = {
+    "auth/account-exists-with-different-credential": "Bu email adresi farklı bir giriş yöntemiyle kayıtlı.",
     "auth/email-already-in-use": "Bu email adresiyle bir hesap zaten var.",
     "auth/invalid-email": "Geçerli bir email adresi yaz.",
     "auth/invalid-credential": "Email veya şifre hatalı.",
     "auth/missing-password": "Şifre alanı boş bırakılamaz.",
+    "auth/operation-not-allowed": "Bu giriş yöntemi Firebase Console'da etkin değil.",
     "auth/too-many-requests": "Çok fazla deneme yapıldı. Biraz bekleyip tekrar dene.",
     "auth/user-not-found": "Bu email adresiyle kayıtlı hesap bulunamadı.",
     "auth/weak-password": "Şifre en az 6 karakter olmalı.",
@@ -65,6 +63,29 @@ const authErrorMessage = (cause: unknown, fallback: string) => {
   return messages[cause.code] || fallback;
 };
 
+const firebaseRequiredMessage = "Bu giriş yöntemi için Firebase anahtarları ve ilgili provider etkin olmalı.";
+
+const isFirestoreOfflineError = (cause: unknown) =>
+  cause instanceof FirebaseError &&
+  (cause.code === "unavailable" || cause.message.toLowerCase().includes("client is offline"));
+
+const cleanProfileSeed = (user: User, fullName?: string) => ({
+  uid: user.uid,
+  email: user.email || "",
+  fullName: fullName || displayNameForUser(user) || "",
+  avatarUrl: photoUrlForUser(user) || "",
+  avatarStoragePath: "",
+  jobTitle: "",
+  language: "tr",
+  pushNotifications: true,
+  isPremium: false,
+  premiumPlan: null,
+  premiumExpiresAt: null
+});
+
+const needsDemoProfileRepair = (value: Record<string, unknown>) =>
+  value.email === demoProfile.email || value.fullName === demoProfile.fullName || value.jobTitle === demoProfile.jobTitle;
+
 async function createProfileIfNeeded(user: User, fullName?: string) {
   const firestore = db;
 
@@ -72,38 +93,55 @@ async function createProfileIfNeeded(user: User, fullName?: string) {
     return;
   }
 
-  const userRef = doc(firestore, "users", user.uid);
-  const existing = await getDoc(userRef);
+  try {
+    const userRef = doc(firestore, "users", user.uid);
+    const existing = await getDoc(userRef);
 
-  if (!existing.exists()) {
-    await setDoc(userRef, {
-      uid: user.uid,
-      email: user.email,
-      fullName: fullName || user.displayName || "",
-      avatarUrl: user.photoURL || "",
-      avatarStoragePath: "",
-      jobTitle: "",
-      language: "tr",
-      pushNotifications: true,
-      darkMode: false,
-      isPremium: false,
-      premiumPlan: null,
-      premiumExpiresAt: null,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp()
-    });
+    if (!existing.exists()) {
+      const seed = cleanProfileSeed(user, fullName);
+      await setDoc(userRef, {
+        ...seed,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
 
-    await Promise.all(
-      demoCategories.map((category) =>
-        addDoc(collection(firestore, "users", user.uid, "categories"), {
-          name: category.name,
-          icon: category.icon,
-          color: category.color,
-          taskCount: 0,
-          createdAt: serverTimestamp()
-        })
-      )
-    );
+      await Promise.all(
+        demoCategories.map((category) =>
+          setDoc(
+            doc(firestore, "users", user.uid, "categories", category.id),
+            {
+              name: category.name,
+              icon: category.icon,
+              color: category.color,
+              taskCount: 0,
+              createdAt: serverTimestamp()
+            },
+            { merge: true }
+          )
+        )
+      );
+    } else if (needsDemoProfileRepair(existing.data())) {
+      const seed = cleanProfileSeed(user, fullName);
+      await setDoc(
+        userRef,
+        {
+          uid: user.uid,
+          email: seed.email,
+          fullName: seed.fullName || user.email || "",
+          avatarUrl: seed.avatarUrl,
+          jobTitle: "",
+          updatedAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+    }
+  } catch (cause) {
+    if (isFirestoreOfflineError(cause)) {
+      console.warn("Firestore profile bootstrap skipped because the client is offline.");
+      return;
+    }
+
+    console.warn("Firestore profile bootstrap failed.", cause);
   }
 }
 
@@ -120,7 +158,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        await createProfileIfNeeded(firebaseUser);
+        try {
+          await createProfileIfNeeded(firebaseUser);
+        } catch (cause) {
+          console.warn("Firebase profile bootstrap failed.", cause);
+        }
         setUser(toAppUser(firebaseUser));
       } else {
         setUser(null);
@@ -141,7 +183,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         setError(null);
 
         if (!auth) {
-          setUser(demoUser);
+          setError(firebaseRequiredMessage);
           return;
         }
 
@@ -150,14 +192,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
           await createProfileIfNeeded(credential.user);
         } catch (cause) {
           setError(authErrorMessage(cause, "Giriş yapılamadı."));
-          throw cause;
         }
       },
       signUpWithEmail: async (email, password, fullName) => {
         setError(null);
 
         if (!auth) {
-          setUser({ ...demoUser, displayName: fullName || demoUser.displayName });
+          setError(firebaseRequiredMessage);
           return;
         }
 
@@ -169,7 +210,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
           await createProfileIfNeeded(credential.user, fullName);
         } catch (cause) {
           setError(authErrorMessage(cause, "Hesap oluşturulamadı."));
-          throw cause;
         }
       },
       sendPasswordReset: async (email) => {
@@ -177,19 +217,16 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
         if (!auth) {
           setError("Şifre sıfırlama için Firebase anahtarlarını ayarlamalısın.");
-          return;
+          return false;
         }
 
         try {
           await sendPasswordResetEmail(auth, email.trim());
+          return true;
         } catch (cause) {
           setError(authErrorMessage(cause, "Şifre sıfırlama emaili gönderilemedi."));
-          throw cause;
+          return false;
         }
-      },
-      signInDemo: () => {
-        setError(null);
-        setUser(demoUser);
       },
       signOut: async () => {
         setError(null);

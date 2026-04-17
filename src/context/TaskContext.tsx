@@ -1,4 +1,5 @@
-import React, { createContext, PropsWithChildren, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, PropsWithChildren, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { FirebaseError } from "firebase/app";
 import {
   addDoc,
   collection,
@@ -14,9 +15,14 @@ import {
 
 import { demoCategories, demoProfile, demoTasks } from "../data/demo";
 import { db } from "../lib/firebase";
-import { cancelTaskReminder, scheduleTaskReminder } from "../lib/notifications";
-import { deleteStoredFile, uploadAvatar, uploadTaskAttachment } from "../lib/storage";
-import { Attachment, Category, PickedFile, Task, TaskDraft, TaskHistoryEntry, UserProfile } from "../types";
+import {
+  cancelAllTaskReminders,
+  cancelTaskReminder,
+  isNotificationPermissionDeniedError,
+  requestTaskNotificationPermission,
+  scheduleTaskReminder
+} from "../lib/notifications";
+import { AppUser, Category, Task, TaskDraft, TaskHistoryEntry, UserProfile } from "../types";
 import { useAuth } from "./AuthContext";
 
 interface TaskContextValue {
@@ -30,15 +36,29 @@ interface TaskContextValue {
   toggleTask: (taskId: string) => Promise<void>;
   addCategory: (name: string) => Promise<void>;
   updateProfile: (profile: Partial<UserProfile>) => Promise<void>;
-  uploadProfileAvatar: (file: PickedFile) => Promise<void>;
-  addTaskAttachment: (taskId: string, file: PickedFile) => Promise<void>;
-  removeTaskAttachment: (taskId: string, attachmentId: string) => Promise<void>;
+  notificationPermissionDenied: boolean;
+  clearNotificationWarning: () => void;
 }
 
 const TaskContext = createContext<TaskContextValue | undefined>(undefined);
 
+type ReminderTask = Pick<Task | TaskDraft, "title" | "dueDate" | "dueTime" | "reminderTime">;
+
 const dateString = () => new Date().toISOString();
 const cleanId = () => Math.random().toString(36).slice(2, 10);
+const nameFromEmail = (email: string | null) => {
+  const localPart = email?.split("@")[0]?.trim();
+
+  if (!localPart) {
+    return "";
+  }
+
+  return localPart
+    .replace(/[._-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
 const localDateKey = (value = new Date()) => {
   const year = value.getFullYear();
   const month = `${value.getMonth() + 1}`.padStart(2, "0");
@@ -70,6 +90,18 @@ const normalizeDate = (value: unknown): string | null => {
   }
 
   return null;
+};
+
+const normalizeProfileDate = (value: unknown, fallback: string) => {
+  if (typeof value === "string" && !Number.isNaN(new Date(value).getTime())) {
+    return value;
+  }
+
+  if (typeof value === "object" && value && "toDate" in value && typeof value.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+
+  return fallback;
 };
 
 const recalculateCategories = (categories: Category[], tasks: Task[]) =>
@@ -202,6 +234,83 @@ const prepareTaskDraft = (task: TaskDraft): TaskDraft => {
   };
 };
 
+const isFirestoreOfflineError = (cause: unknown) =>
+  cause instanceof FirebaseError &&
+  (cause.code === "unavailable" || cause.message.toLowerCase().includes("client is offline"));
+
+const warnFirestoreSyncFailure = (operation: string, cause: unknown) => {
+  console.warn(`${operation} could not be synced to Firestore.`, cause);
+};
+
+const defaultProfileForUser = (user: AppUser): UserProfile => {
+  const now = dateString();
+
+  return {
+    uid: user.uid,
+    email: user.email || "",
+    fullName: user.displayName || nameFromEmail(user.email),
+    avatarUrl: user.photoURL || "",
+    avatarStoragePath: "",
+    jobTitle: "",
+    language: demoProfile.language,
+    pushNotifications: true,
+    isPremium: false,
+    premiumPlan: null,
+    premiumExpiresAt: null,
+    createdAt: now,
+    updatedAt: now
+  };
+};
+
+const profileForAuthenticatedUser = (user: AppUser, value: Partial<UserProfile> = {}) => {
+  const fallback = defaultProfileForUser(user);
+  const nextProfile: UserProfile = { ...fallback, ...value, uid: user.uid };
+  nextProfile.createdAt = normalizeProfileDate(value.createdAt, fallback.createdAt);
+  nextProfile.updatedAt = normalizeProfileDate(value.updatedAt, fallback.updatedAt);
+
+  if (nextProfile.email === demoProfile.email) {
+    nextProfile.email = fallback.email;
+  }
+
+  if (nextProfile.fullName === demoProfile.fullName || !nextProfile.fullName.trim()) {
+    nextProfile.fullName = fallback.fullName || fallback.email || "Kullanıcı";
+  }
+
+  if (nextProfile.jobTitle === demoProfile.jobTitle) {
+    nextProfile.jobTitle = "";
+  }
+
+  if (!nextProfile.avatarUrl && fallback.avatarUrl) {
+    nextProfile.avatarUrl = fallback.avatarUrl;
+  }
+
+  return nextProfile;
+};
+
+const profileRepairPatch = (source: Partial<UserProfile>, sanitized: UserProfile) => {
+  const patch: Partial<UserProfile> = {};
+
+  if (source.email === demoProfile.email) {
+    patch.email = sanitized.email;
+  }
+
+  if (source.fullName === demoProfile.fullName || !source.fullName?.trim()) {
+    patch.fullName = sanitized.fullName;
+  }
+
+  if (source.jobTitle === demoProfile.jobTitle) {
+    patch.jobTitle = "";
+  }
+
+  if (!source.avatarUrl && sanitized.avatarUrl) {
+    patch.avatarUrl = sanitized.avatarUrl;
+  }
+
+  return patch;
+};
+
+const hasProfileRepairPatch = (patch: Partial<UserProfile>) => Object.keys(patch).length > 0;
+
 const toTask = (id: string, value: Record<string, unknown>): Task => ({
   id,
   categoryId: typeof value.categoryId === "string" ? value.categoryId : null,
@@ -217,7 +326,6 @@ const toTask = (id: string, value: Record<string, unknown>): Task => ({
   lastDailyRefresh: normalizeDate(value.lastDailyRefresh),
   notificationId: typeof value.notificationId === "string" ? value.notificationId : null,
   subtasks: Array.isArray(value.subtasks) ? (value.subtasks as Task["subtasks"]) : [],
-  attachments: Array.isArray(value.attachments) ? (value.attachments as Task["attachments"]) : [],
   completionHistory: normalizeHistory(id, value.completionHistory),
   createdAt: normalizeDate(value.createdAt) || dateString(),
   updatedAt: normalizeDate(value.updatedAt) || dateString()
@@ -232,12 +340,146 @@ const toCategory = (id: string, value: Record<string, unknown>): Category => ({
   createdAt: normalizeDate(value.createdAt) || dateString()
 });
 
+const seedCategoryIds = new Set(demoCategories.map((category) => category.id));
+const categoryKey = (category: Category) => category.name.trim().toLocaleLowerCase("tr-TR");
+const categorySortValue = (category: Category) => `${category.createdAt}-${category.id}`;
+
+const chooseCanonicalCategory = (group: Category[], tasks: Task[]) => {
+  const withReferences = group.map((category) => ({
+    category,
+    references: tasks.filter((task) => task.categoryId === category.id).length
+  }));
+  const maxReferences = Math.max(...withReferences.map((item) => item.references));
+  const candidates = withReferences.filter((item) => item.references === maxReferences).map((item) => item.category);
+  const seeded = candidates.find((category) => seedCategoryIds.has(category.id));
+
+  if (seeded) {
+    return seeded;
+  }
+
+  return [...candidates].sort((left, right) => categorySortValue(left).localeCompare(categorySortValue(right)))[0] || group[0]!;
+};
+
+const duplicateCategoryGroups = (categories: Category[], tasks: Task[]) => {
+  const groups = new Map<string, Category[]>();
+
+  categories.forEach((category) => {
+    const key = categoryKey(category);
+    groups.set(key, [...(groups.get(key) || []), category]);
+  });
+
+  return Array.from(groups.values())
+    .filter((group) => group.length > 1)
+    .map((group) => {
+      const canonical = chooseCanonicalCategory(group, tasks);
+      return {
+        canonical,
+        duplicates: group.filter((category) => category.id !== canonical.id)
+      };
+    })
+    .filter((group) => group.duplicates.length > 0);
+};
+
+const categoryCanonicalMap = (categories: Category[], tasks: Task[]) => {
+  const map = new Map<string, Category>();
+
+  duplicateCategoryGroups(categories, tasks).forEach(({ canonical, duplicates }) => {
+    duplicates.forEach((duplicate) => map.set(duplicate.id, canonical));
+  });
+
+  return map;
+};
+
+const reassignDuplicateCategoryTasks = (tasks: Task[], canonicalMap: Map<string, Category>) =>
+  tasks.map((task) => {
+    const canonical = task.categoryId ? canonicalMap.get(task.categoryId) : null;
+
+    if (!canonical) {
+      return task;
+    }
+
+    return {
+      ...task,
+      categoryId: canonical.id,
+      categoryName: canonical.name
+    };
+  });
+
+const uniqueCategories = (categories: Category[], tasks: Task[]) => {
+  const canonicalMap = categoryCanonicalMap(categories, tasks);
+  const duplicateIds = new Set(canonicalMap.keys());
+  const nextCategories = categories.filter((category) => !duplicateIds.has(category.id));
+  return recalculateCategories(nextCategories, reassignDuplicateCategoryTasks(tasks, canonicalMap));
+};
+
 export function TaskProvider({ children }: PropsWithChildren) {
   const { user } = useAuth();
   const [profile, setProfile] = useState<UserProfile>(demoProfile);
   const [tasks, setTasks] = useState<Task[]>(demoTasks);
   const [categories, setCategories] = useState<Category[]>(demoCategories);
   const [loading, setLoading] = useState(false);
+  const [notificationPermissionDenied, setNotificationPermissionDenied] = useState(false);
+  const categoryCleanupKeyRef = useRef("");
+
+  const clearNotificationWarning = useCallback(() => setNotificationPermissionDenied(false), []);
+
+  const handleNotificationFailure = useCallback((cause: unknown) => {
+    if (isNotificationPermissionDeniedError(cause)) {
+      setNotificationPermissionDenied(true);
+      return;
+    }
+
+    console.warn("Notification scheduling failed.", cause);
+  }, []);
+
+  const scheduleReminderForTask = useCallback(
+    async (task: ReminderTask, shouldSchedule = profile.pushNotifications) => {
+      if (!shouldSchedule) {
+        return null;
+      }
+
+      try {
+        return await scheduleTaskReminder(task);
+      } catch (cause) {
+        handleNotificationFailure(cause);
+        return null;
+      }
+    },
+    [handleNotificationFailure, profile.pushNotifications]
+  );
+
+  const syncDailyTaskRefresh = useCallback(
+    async (task: Task, firestore: typeof db, uid?: string, shouldSchedule = profile.pushNotifications) => {
+      if (task.notificationId) {
+        try {
+          await cancelTaskReminder(task.notificationId);
+        } catch (cause) {
+          console.warn("Failed to cancel stale daily reminder.", cause);
+        }
+      }
+
+      const notificationId = await scheduleReminderForTask(task, shouldSchedule);
+
+      if (firestore && uid) {
+        try {
+          await updateDoc(doc(firestore, "users", uid, "tasks", task.id), {
+            dueDate: task.dueDate,
+            isCompleted: task.isCompleted,
+            lastDailyRefresh: task.lastDailyRefresh,
+            subtasks: task.subtasks,
+            completionHistory: task.completionHistory,
+            notificationId,
+            updatedAt: serverTimestamp()
+          });
+        } catch (cause) {
+          warnFirestoreSyncFailure("Daily task refresh", cause);
+        }
+      }
+
+      setTasks((current) => current.map((item) => (item.id === task.id ? { ...item, notificationId } : item)));
+    },
+    [profile.pushNotifications, scheduleReminderForTask]
+  );
 
   useEffect(() => {
     if (!user) {
@@ -250,13 +492,7 @@ export function TaskProvider({ children }: PropsWithChildren) {
 
     if (!db || user.isDemo) {
       const { nextTasks } = renewDailyTasks(demoTasks);
-      setProfile({
-        ...demoProfile,
-        uid: user.uid,
-        email: user.email || demoProfile.email,
-        fullName: user.displayName || demoProfile.fullName,
-        avatarUrl: user.photoURL || ""
-      });
+      setProfile(user.isDemo ? demoProfile : profileForAuthenticatedUser(user));
       setTasks(nextTasks);
       setCategories(recalculateCategories(demoCategories, nextTasks));
       return undefined;
@@ -264,44 +500,149 @@ export function TaskProvider({ children }: PropsWithChildren) {
 
     const firestore = db;
     setLoading(true);
+    const localProfile = profileForAuthenticatedUser(user);
     const profileRef = doc(firestore, "users", user.uid);
     const tasksQuery = query(collection(firestore, "users", user.uid, "tasks"), orderBy("createdAt", "desc"));
     const categoriesQuery = query(collection(firestore, "users", user.uid, "categories"), orderBy("createdAt", "asc"));
-
-    const unsubProfile = onSnapshot(profileRef, (snapshot) => {
-      if (snapshot.exists()) {
-        setProfile({ ...demoProfile, ...(snapshot.data() as Partial<UserProfile>), uid: user.uid });
-      }
-    });
-
-    const unsubTasks = onSnapshot(tasksQuery, (snapshot) => {
-      const loadedTasks = snapshot.docs.map((item) => toTask(item.id, item.data()));
-      const { nextTasks, changedTasks } = renewDailyTasks(loadedTasks);
-      setTasks(nextTasks);
+    const handleSnapshotError = (cause: unknown) => {
+      console.warn("Firestore sync failed.", cause);
       setLoading(false);
 
-      changedTasks.forEach((task) => {
-        updateDoc(doc(firestore, "users", user.uid, "tasks", task.id), {
-          dueDate: task.dueDate,
-          isCompleted: task.isCompleted,
-          lastDailyRefresh: task.lastDailyRefresh,
-          subtasks: task.subtasks,
-          completionHistory: task.completionHistory,
-          updatedAt: serverTimestamp()
-        });
-      });
-    });
+      if (isFirestoreOfflineError(cause)) {
+        setProfile(localProfile);
+        setTasks((current) => (current.length ? current : renewDailyTasks(demoTasks).nextTasks));
+        setCategories((current) => (current.length ? current : recalculateCategories(demoCategories, demoTasks)));
+      }
+    };
+    let syncedProfile: UserProfile | null = null;
+    let pendingDailyRefreshes: Task[] = [];
+    const flushDailyRefreshes = () => {
+      if (!syncedProfile || !pendingDailyRefreshes.length) {
+        return;
+      }
 
-    const unsubCategories = onSnapshot(categoriesQuery, (snapshot) => {
-      setCategories(snapshot.docs.map((item) => toCategory(item.id, item.data())));
-    });
+      const queuedTasks = pendingDailyRefreshes;
+      pendingDailyRefreshes = [];
+
+      queuedTasks.forEach((task) => {
+        void syncDailyTaskRefresh(task, firestore, user.uid, syncedProfile?.pushNotifications ?? false);
+      });
+    };
+
+    const unsubProfile = onSnapshot(
+      profileRef,
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const sourceProfile = snapshot.data() as Partial<UserProfile>;
+          const sanitizedProfile = profileForAuthenticatedUser(user, sourceProfile);
+          const repairPatch = profileRepairPatch(sourceProfile, sanitizedProfile);
+
+          syncedProfile = sanitizedProfile;
+          setProfile(sanitizedProfile);
+
+          if (hasProfileRepairPatch(repairPatch)) {
+            setDoc(
+              profileRef,
+              {
+                uid: user.uid,
+                ...repairPatch,
+                updatedAt: serverTimestamp()
+              },
+              { merge: true }
+            ).catch((cause) => warnFirestoreSyncFailure("Profile repair", cause));
+          }
+        } else {
+          syncedProfile = localProfile;
+          setProfile(localProfile);
+        }
+
+        flushDailyRefreshes();
+      },
+      handleSnapshotError
+    );
+
+    const unsubTasks = onSnapshot(
+      tasksQuery,
+      (snapshot) => {
+        const loadedTasks = snapshot.docs.map((item) => toTask(item.id, item.data()));
+        const { nextTasks, changedTasks } = renewDailyTasks(loadedTasks);
+        setTasks(nextTasks);
+        setLoading(false);
+
+        pendingDailyRefreshes = [...pendingDailyRefreshes, ...changedTasks];
+        flushDailyRefreshes();
+      },
+      handleSnapshotError
+    );
+
+    const unsubCategories = onSnapshot(
+      categoriesQuery,
+      (snapshot) => {
+        setCategories(snapshot.docs.map((item) => toCategory(item.id, item.data())));
+      },
+      handleSnapshotError
+    );
 
     return () => {
       unsubProfile();
       unsubTasks();
       unsubCategories();
     };
-  }, [user]);
+  }, [syncDailyTaskRefresh, user]);
+
+  useEffect(() => {
+    if (!db || !user || user.isDemo || categories.length < 2) {
+      categoryCleanupKeyRef.current = "";
+      return;
+    }
+
+    const duplicateGroups = duplicateCategoryGroups(categories, tasks);
+
+    if (!duplicateGroups.length) {
+      categoryCleanupKeyRef.current = "";
+      return;
+    }
+
+    const cleanupKey = duplicateGroups
+      .map((group) => `${group.canonical.id}:${group.duplicates.map((category) => category.id).sort().join(",")}`)
+      .sort()
+      .join("|");
+
+    if (categoryCleanupKeyRef.current === cleanupKey) {
+      return;
+    }
+
+    categoryCleanupKeyRef.current = cleanupKey;
+
+    const firestore = db;
+    const canonicalMap = categoryCanonicalMap(categories, tasks);
+    const duplicateIds = new Set(canonicalMap.keys());
+
+    tasks.forEach((task) => {
+      const canonical = task.categoryId ? canonicalMap.get(task.categoryId) : null;
+
+      if (!canonical) {
+        return;
+      }
+
+      updateDoc(doc(firestore, "users", user.uid, "tasks", task.id), {
+        categoryId: canonical.id,
+        categoryName: canonical.name,
+        updatedAt: serverTimestamp()
+      }).catch((cause) => warnFirestoreSyncFailure("Duplicate category task repair", cause));
+    });
+
+    duplicateGroups.forEach((group) => {
+      group.duplicates.forEach((category) => {
+        deleteDoc(doc(firestore, "users", user.uid, "categories", category.id)).catch((cause) =>
+          warnFirestoreSyncFailure("Duplicate category deletion", cause)
+        );
+      });
+    });
+
+    setTasks((current) => reassignDuplicateCategoryTasks(current, canonicalMap));
+    setCategories((current) => current.filter((category) => !duplicateIds.has(category.id)));
+  }, [categories, tasks, user]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -316,14 +657,11 @@ export function TaskProvider({ children }: PropsWithChildren) {
 
         if (firestore && user && !user.isDemo) {
           changedTasks.forEach((task) => {
-            updateDoc(doc(firestore, "users", user.uid, "tasks", task.id), {
-              dueDate: task.dueDate,
-              isCompleted: task.isCompleted,
-              lastDailyRefresh: task.lastDailyRefresh,
-              subtasks: task.subtasks,
-              completionHistory: task.completionHistory,
-              updatedAt: serverTimestamp()
-            });
+            void syncDailyTaskRefresh(task, firestore, user.uid);
+          });
+        } else {
+          changedTasks.forEach((task) => {
+            void syncDailyTaskRefresh(task, null, undefined, Boolean(user && !user.isDemo));
           });
         }
 
@@ -332,25 +670,28 @@ export function TaskProvider({ children }: PropsWithChildren) {
     }, 60 * 1000);
 
     return () => clearInterval(interval);
-  }, [user]);
+  }, [syncDailyTaskRefresh, user]);
 
   const actions = useMemo(
     () => ({
       addTask: async (task: TaskDraft) => {
         const preparedTask = prepareTaskDraft(task);
-        const notificationId = profile.pushNotifications ? await scheduleTaskReminder(preparedTask) : null;
+        const notificationId = await scheduleReminderForTask(preparedTask);
 
         if (db && user && !user.isDemo) {
-          const created = await addDoc(collection(db, "users", user.uid, "tasks"), {
-            ...preparedTask,
-            subtasks: preparedTask.subtasks || [],
-            attachments: preparedTask.attachments || [],
-            completionHistory: preparedTask.completionHistory || [],
-            notificationId,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp()
-          });
-          return created.id;
+          try {
+            const created = await addDoc(collection(db, "users", user.uid, "tasks"), {
+              ...preparedTask,
+              subtasks: preparedTask.subtasks || [],
+              completionHistory: preparedTask.completionHistory || [],
+              notificationId,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            });
+            return created.id;
+          } catch (cause) {
+            warnFirestoreSyncFailure("Task creation", cause);
+          }
         }
 
         const id = `task-${cleanId()}`;
@@ -358,7 +699,6 @@ export function TaskProvider({ children }: PropsWithChildren) {
           ...preparedTask,
           id,
           subtasks: preparedTask.subtasks || [],
-          attachments: preparedTask.attachments || [],
           completionHistory: preparedTask.completionHistory || [],
           lastDailyRefresh: preparedTask.lastDailyRefresh || null,
           notificationId,
@@ -380,28 +720,34 @@ export function TaskProvider({ children }: PropsWithChildren) {
               lastDailyRefresh: repeat === "daily" ? task.lastDailyRefresh || existing.lastDailyRefresh || task.dueDate || existing.dueDate || localDateKey() : null
             })
           : null;
-        const nextNotificationId =
-          mergedTask && profile.pushNotifications ? await scheduleTaskReminder(mergedTask) : task.notificationId ?? existing?.notificationId ?? null;
+        const nextNotificationId = mergedTask ? await scheduleReminderForTask(mergedTask) : null;
 
         if (existing?.notificationId && existing.notificationId !== nextNotificationId) {
-          await cancelTaskReminder(existing.notificationId);
+          try {
+            await cancelTaskReminder(existing.notificationId);
+          } catch (cause) {
+            console.warn("Failed to cancel replaced task reminder.", cause);
+          }
         }
 
         if (db && user && !user.isDemo) {
-          await updateDoc(doc(db, "users", user.uid, "tasks", taskId), {
-            ...task,
-            ...(mergedTask
-              ? {
-                  repeat: mergedTask.repeat,
-                  dueDate: mergedTask.dueDate,
-                  lastDailyRefresh: mergedTask.lastDailyRefresh,
-                  completionHistory: mergedTask.completionHistory || existing?.completionHistory || []
-                }
-              : {}),
-            notificationId: nextNotificationId,
-            updatedAt: serverTimestamp()
-          });
-          return;
+          try {
+            await updateDoc(doc(db, "users", user.uid, "tasks", taskId), {
+              ...task,
+              ...(mergedTask
+                ? {
+                    repeat: mergedTask.repeat,
+                    dueDate: mergedTask.dueDate,
+                    lastDailyRefresh: mergedTask.lastDailyRefresh,
+                    completionHistory: mergedTask.completionHistory || existing?.completionHistory || []
+                  }
+                : {}),
+              notificationId: nextNotificationId,
+              updatedAt: serverTimestamp()
+            });
+          } catch (cause) {
+            warnFirestoreSyncFailure("Task update", cause);
+          }
         }
 
         setTasks((current) =>
@@ -412,15 +758,20 @@ export function TaskProvider({ children }: PropsWithChildren) {
       },
       deleteTask: async (taskId: string) => {
         const existing = tasks.find((item) => item.id === taskId);
-        await cancelTaskReminder(existing?.notificationId);
-
-        if (db && user && !user.isDemo) {
-          await deleteDoc(doc(db, "users", user.uid, "tasks", taskId));
-          await Promise.all((existing?.attachments || []).map((attachment) => deleteStoredFile(attachment.storagePath)));
-          return;
+        try {
+          await cancelTaskReminder(existing?.notificationId);
+        } catch (cause) {
+          console.warn("Failed to cancel deleted task reminder.", cause);
         }
 
-        await Promise.all((existing?.attachments || []).map((attachment) => deleteStoredFile(attachment.storagePath)));
+        if (db && user && !user.isDemo) {
+          try {
+            await deleteDoc(doc(db, "users", user.uid, "tasks", taskId));
+          } catch (cause) {
+            warnFirestoreSyncFailure("Task deletion", cause);
+          }
+        }
+
         setTasks((current) => current.filter((item) => item.id !== taskId));
       },
       toggleTask: async (taskId: string) => {
@@ -434,12 +785,15 @@ export function TaskProvider({ children }: PropsWithChildren) {
         const completionHistory = upsertHistoryEntry(task, historyDate, isCompleted);
 
         if (db && user && !user.isDemo) {
-          await updateDoc(doc(db, "users", user.uid, "tasks", taskId), {
-            isCompleted,
-            completionHistory,
-            updatedAt: serverTimestamp()
-          });
-          return;
+          try {
+            await updateDoc(doc(db, "users", user.uid, "tasks", taskId), {
+              isCompleted,
+              completionHistory,
+              updatedAt: serverTimestamp()
+            });
+          } catch (cause) {
+            warnFirestoreSyncFailure("Task completion", cause);
+          }
         }
 
         setTasks((current) => current.map((item) => (item.id === taskId ? { ...item, isCompleted, completionHistory, updatedAt: dateString() } : item)));
@@ -451,14 +805,18 @@ export function TaskProvider({ children }: PropsWithChildren) {
         }
 
         if (db && user && !user.isDemo) {
-          await addDoc(collection(db, "users", user.uid, "categories"), {
-            name: normalized,
-            icon: "folder",
-            color: "primary",
-            taskCount: 0,
-            createdAt: serverTimestamp()
-          });
-          return;
+          try {
+            await addDoc(collection(db, "users", user.uid, "categories"), {
+              name: normalized,
+              icon: "folder",
+              color: "primary",
+              taskCount: 0,
+              createdAt: serverTimestamp()
+            });
+            return;
+          } catch (cause) {
+            warnFirestoreSyncFailure("Category creation", cause);
+          }
         }
 
         setCategories((current) => [
@@ -474,104 +832,104 @@ export function TaskProvider({ children }: PropsWithChildren) {
         ]);
       },
       updateProfile: async (partial: Partial<UserProfile>) => {
-        const nextProfile = { ...profile, ...partial, updatedAt: dateString() };
-        if (db && user && !user.isDemo) {
-          await setDoc(doc(db, "users", user.uid), nextProfile, { merge: true });
-        }
-        setProfile(nextProfile);
-      },
-      uploadProfileAvatar: async (file: PickedFile) => {
-        if (db && user && !user.isDemo) {
-          const result = await uploadAvatar(user.uid, file);
-          const nextProfile = { ...profile, avatarUrl: result.fileUrl, avatarStoragePath: result.storagePath, updatedAt: dateString() };
+        let nextPartial = partial;
 
+        if (partial.pushNotifications === true) {
+          try {
+            await requestTaskNotificationPermission();
+          } catch (cause) {
+            handleNotificationFailure(cause);
+            nextPartial = { ...partial, pushNotifications: false };
+          }
+        }
+
+        if (nextPartial.pushNotifications === false) {
+          try {
+            await cancelAllTaskReminders(tasks.map((task) => task.notificationId));
+          } catch (cause) {
+            console.warn("Failed to cancel task reminders.", cause);
+          }
+
+          setTasks((current) => current.map((task) => (task.notificationId ? { ...task, notificationId: null } : task)));
+
+          if (db && user && !user.isDemo) {
+            const firestore = db;
+            await Promise.all(
+              tasks
+                .filter((task) => task.notificationId)
+                .map((task) =>
+                  updateDoc(doc(firestore, "users", user.uid, "tasks", task.id), {
+                    notificationId: null,
+                    updatedAt: serverTimestamp()
+                  }).catch((cause) => warnFirestoreSyncFailure("Task reminder cancellation", cause))
+                )
+            );
+          }
+        }
+
+        if (nextPartial.pushNotifications === true) {
+          const notificationUpdates = new Map<string, string | null>();
+
+          for (const task of tasks) {
+            if (task.notificationId) {
+              try {
+                await cancelTaskReminder(task.notificationId);
+              } catch (cause) {
+                console.warn("Failed to replace task reminder.", cause);
+              }
+            }
+
+            notificationUpdates.set(task.id, await scheduleReminderForTask(task, true));
+          }
+
+          setTasks((current) =>
+            current.map((task) =>
+              notificationUpdates.has(task.id) ? { ...task, notificationId: notificationUpdates.get(task.id) ?? null } : task
+            )
+          );
+
+          if (db && user && !user.isDemo) {
+            const firestore = db;
+            await Promise.all(
+              Array.from(notificationUpdates.entries()).map(([taskId, notificationId]) =>
+                updateDoc(doc(firestore, "users", user.uid, "tasks", taskId), {
+                  notificationId,
+                  updatedAt: serverTimestamp()
+                }).catch((cause) => warnFirestoreSyncFailure("Task reminder setup", cause))
+              )
+            );
+          }
+        }
+
+        const nextProfile =
+          user && !user.isDemo
+            ? profileForAuthenticatedUser(user, { ...profile, ...nextPartial, updatedAt: dateString() })
+            : { ...profile, ...nextPartial, updatedAt: dateString() };
+        setProfile(nextProfile);
+
+        if (db && user && !user.isDemo) {
           try {
             await setDoc(doc(db, "users", user.uid), nextProfile, { merge: true });
-            await deleteStoredFile(profile.avatarStoragePath);
-            setProfile(nextProfile);
           } catch (cause) {
-            await deleteStoredFile(result.storagePath);
-            throw cause;
+            warnFirestoreSyncFailure("Profile update", cause);
           }
-          return;
         }
-
-        setProfile((current) => ({ ...current, avatarUrl: file.uri, updatedAt: dateString() }));
-      },
-      addTaskAttachment: async (taskId: string, file: PickedFile) => {
-        const existing = tasks.find((item) => item.id === taskId);
-        if (!existing) {
-          return;
-        }
-
-        let uploaded = {
-          fileUrl: file.uri,
-          storagePath: ""
-        };
-
-        if (db && user && !user.isDemo) {
-          uploaded = await uploadTaskAttachment(user.uid, taskId, file);
-        }
-
-        const attachment: Attachment = {
-          id: `attachment-${cleanId()}`,
-          fileUrl: uploaded.fileUrl,
-          fileName: file.name,
-          fileType: file.mimeType || "application/octet-stream",
-          storagePath: uploaded.storagePath,
-          createdAt: dateString()
-        };
-        const attachments = [...existing.attachments, attachment];
-
-        if (db && user && !user.isDemo) {
-          try {
-            await updateDoc(doc(db, "users", user.uid, "tasks", taskId), {
-              attachments,
-              updatedAt: serverTimestamp()
-            });
-          } catch (cause) {
-            await deleteStoredFile(uploaded.storagePath);
-            throw cause;
-          }
-          return;
-        }
-
-        setTasks((current) => current.map((item) => (item.id === taskId ? { ...item, attachments, updatedAt: dateString() } : item)));
-      },
-      removeTaskAttachment: async (taskId: string, attachmentId: string) => {
-        const existing = tasks.find((item) => item.id === taskId);
-        const attachment = existing?.attachments.find((item) => item.id === attachmentId);
-
-        if (!existing || !attachment) {
-          return;
-        }
-
-        await deleteStoredFile(attachment.storagePath);
-        const attachments = existing.attachments.filter((item) => item.id !== attachmentId);
-
-        if (db && user && !user.isDemo) {
-          await updateDoc(doc(db, "users", user.uid, "tasks", taskId), {
-            attachments,
-            updatedAt: serverTimestamp()
-          });
-          return;
-        }
-
-        setTasks((current) => current.map((item) => (item.id === taskId ? { ...item, attachments, updatedAt: dateString() } : item)));
       }
     }),
-    [profile, tasks, user]
+    [handleNotificationFailure, profile, scheduleReminderForTask, tasks, user]
   );
 
   const value = useMemo<TaskContextValue>(
     () => ({
       profile,
       tasks,
-      categories: recalculateCategories(categories, tasks),
+      categories: uniqueCategories(categories, tasks),
       loading,
+      notificationPermissionDenied,
+      clearNotificationWarning,
       ...actions
     }),
-    [actions, categories, loading, profile, tasks]
+    [actions, categories, clearNotificationWarning, loading, notificationPermissionDenied, profile, tasks]
   );
 
   return <TaskContext.Provider value={value}>{children}</TaskContext.Provider>;

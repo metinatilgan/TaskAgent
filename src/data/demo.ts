@@ -18,7 +18,6 @@ export const demoProfile: UserProfile = {
   jobTitle: "Editoryal Çalışma Alanı",
   language: "tr",
   pushNotifications: true,
-  darkMode: false,
   isPremium: false,
   premiumPlan: null,
   premiumExpiresAt: null,
@@ -83,7 +82,6 @@ export const demoTasks: Task[] = [
         createdAt: now
       }
     ],
-    attachments: [],
     completionHistory: [],
     createdAt: now,
     updatedAt: now
@@ -102,7 +100,6 @@ export const demoTasks: Task[] = [
     repeat: "none",
     lastDailyRefresh: null,
     subtasks: [],
-    attachments: [],
     completionHistory: [],
     createdAt: now,
     updatedAt: now
@@ -121,7 +118,6 @@ export const demoTasks: Task[] = [
     repeat: "daily",
     lastDailyRefresh: formatDate(today),
     subtasks: [],
-    attachments: [],
     completionHistory: [
       {
         id: `history-task-3-${formatDate(yesterday)}`,
@@ -151,7 +147,6 @@ export const demoTasks: Task[] = [
     repeat: "none",
     lastDailyRefresh: null,
     subtasks: [],
-    attachments: [],
     completionHistory: [],
     createdAt: now,
     updatedAt: now

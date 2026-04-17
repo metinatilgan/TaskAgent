@@ -5,12 +5,12 @@ export type Language = UserProfile["language"];
 export interface AppCopy {
   common: {
     active: string;
-    addAttachment: string;
     back: string;
     completed: string;
     inbox: string;
     missed: string;
     noDate: string;
+    operationFailed: string;
     premium: string;
     task: string;
   };
@@ -41,7 +41,6 @@ export interface AppCopy {
     editAvatar: string;
     deleteTask: string;
     addSubtask: string;
-    removeAttachment: (fileName: string) => string;
     searchTasks: string;
     switchToLogin: string;
     switchToSignup: string;
@@ -62,7 +61,6 @@ export interface AppCopy {
     loginButton: string;
     signupButton: string;
     forgotPassword: string;
-    demoButton: string;
     signupLink: string;
     loginLink: string;
     resetNeedsEmail: string;
@@ -114,9 +112,27 @@ export interface AppCopy {
     eyebrow: string;
     heroTitle: string;
     subtitle: string;
+    paywallSubtitle: string;
+    paywallTitle: string;
+    paywallBody: string;
     choosePlan: string;
     summary: string;
     activeBadge: string;
+    loadingPlans: string;
+    revenueCatMissingTitle: string;
+    revenueCatMissingBody: string;
+    plansUnavailableTitle: string;
+    plansUnavailableBody: string;
+    purchaseSuccessTitle: string;
+    purchaseSuccessBody: string;
+    purchaseErrorTitle: string;
+    purchaseErrorBody: string;
+    restoreSuccessTitle: string;
+    restoreSuccessBody: string;
+    restoreInactiveTitle: string;
+    restoreInactiveBody: string;
+    restoreErrorTitle: string;
+    restoreErrorBody: string;
     disclosureBody: string;
     disclosureTitle: string;
     plans: {
@@ -150,8 +166,7 @@ export interface AppCopy {
     upgradePremium: string;
     notifications: string;
     notificationsBody: string;
-    darkMode: string;
-    darkModeBody: string;
+    notificationPermissionDenied: string;
     english: string;
     turkish: string;
     logout: string;
@@ -175,9 +190,6 @@ export interface AppCopy {
     subtasks: string;
     newSubtask: string;
     subtaskPlaceholder: string;
-    attachments: string;
-    noAttachments: string;
-    saveBeforeAttachment: string;
     saveChanges: string;
     addTask: string;
     untitledTask: string;
@@ -193,12 +205,12 @@ export const translations: Record<Language, AppCopy> = {
   tr: {
     common: {
       active: "Aktif",
-      addAttachment: "Ek ekle",
       back: "Geri",
       completed: "Tamamlandı",
       inbox: "Gelen Kutusu",
       missed: "Yapılmadı",
       noDate: "Tarih yok",
+      operationFailed: "İşlem tamamlanamadı. Lütfen tekrar dene.",
       premium: "Premium",
       task: "Görev"
     },
@@ -240,7 +252,6 @@ export const translations: Record<Language, AppCopy> = {
       editAvatar: "Profil görselini düzenle",
       deleteTask: "Görevi sil",
       addSubtask: "Alt görev ekle",
-      removeAttachment: (fileName) => `${fileName} ekini kaldır`,
       searchTasks: "Görev ara",
       switchToLogin: "Giriş ekranına geç",
       switchToSignup: "Kayıt ekranına geç"
@@ -254,14 +265,13 @@ export const translations: Record<Language, AppCopy> = {
       signupTitle: "Odak Alanı Oluştur.",
       loginSubtitle: "Odağını yeniden bul.",
       signupSubtitle: "Daha sakin bir görev alanıyla başla.",
-      firebaseNotice: "Firebase anahtarları henüz ayarlı değil. Demo modu iOS ve Android'de kullanılabilir.",
+      firebaseNotice: "Firebase anahtarları henüz ayarlı değil. Giriş yapmak için Firebase yapılandırması gerekli.",
       fullName: "Ad soyad",
       email: "Email",
       password: "Şifre",
       loginButton: "Email ile Devam Et",
       signupButton: "Hesap Oluştur",
       forgotPassword: "Şifremi Unuttum",
-      demoButton: "Demo Alanını Aç",
       signupLink: "Hesabın yok mu? Kayıt ol",
       loginLink: "Zaten hesabın var mı? Giriş yap",
       resetNeedsEmail: "Şifre sıfırlama bağlantısı için email adresini yaz.",
@@ -313,23 +323,41 @@ export const translations: Record<Language, AppCopy> = {
       eyebrow: "Premium",
       heroTitle: "Dijital Odağın İçin Sakin Alan",
       subtitle: "Sınırsız alan, daha derin ilerleme sinyalleri ve öncelikli destek.",
+      paywallSubtitle: "Premium Gerekli",
+      paywallTitle: "3 Gün Ücretsiz Dene",
+      paywallBody: "TaskAgent'i kullanmak için App Store üzerinden Premium planını başlat. Deneme süren Apple tarafından yönetilir; satın alımlarını buradan geri yükleyebilirsin.",
       choosePlan: "Planını Seç",
-      summary: "Aylık plan 5 dolar. Yıllık planı tercih edersen toplam maliyet düşer.",
+      summary: "Aylık plan 2.99 dolar. Yıllık plan 29.99 dolardır.",
       activeBadge: "Aktif",
+      loadingPlans: "RevenueCat planları yükleniyor.",
+      revenueCatMissingTitle: "RevenueCat yapılandırması eksik",
+      revenueCatMissingBody: "Satın alma için RevenueCat iOS/Android public API key değerlerini .env dosyasına eklemen gerekiyor.",
+      plansUnavailableTitle: "Plan bulunamadı",
+      plansUnavailableBody: "RevenueCat offering içinde aylık veya yıllık paket bulunamadı. Dashboard ürün ve entitlement ayarlarını kontrol et.",
+      purchaseSuccessTitle: "Premium aktif",
+      purchaseSuccessBody: "Satın alma tamamlandı ve Premium durumun güncellendi.",
+      purchaseErrorTitle: "Satın alma tamamlanamadı",
+      purchaseErrorBody: "RevenueCat satın alma akışında hata oluştu. Ürünlerin App Store Connect/Google Play ve RevenueCat üzerinde aktif olduğundan emin ol.",
+      restoreSuccessTitle: "Satın alımlar geri yüklendi",
+      restoreSuccessBody: "Premium aboneliğin bulundu ve hesabına işlendi.",
+      restoreInactiveTitle: "Aktif abonelik bulunamadı",
+      restoreInactiveBody: "Bu mağaza hesabında TaskAgent Premium için aktif abonelik bulunamadı.",
+      restoreErrorTitle: "Geri yükleme tamamlanamadı",
+      restoreErrorBody: "Satın alımlar geri yüklenirken hata oluştu. Daha sonra tekrar dene.",
       disclosureTitle: "Abonelik Bilgileri",
       disclosureBody:
         "TaskAgent Premium otomatik yenilenen bir aboneliktir. Ödeme Apple ID hesabından alınır; abonelik iptal edilmezse mevcut dönemin bitiminden en az 24 saat önce yenilenir. Aboneliklerini App Store hesap ayarlarından yönetebilir veya iptal edebilirsin.",
       plans: {
         monthly: {
           title: "Aylık",
-          price: "$5",
-          detail: "Ayda 5 dolar · istediğin zaman geçiş yap",
+          price: "$2.99",
+          detail: "Ayda 2.99 dolar · istediğin zaman geçiş yap",
           badge: "Esnek plan"
         },
         yearly: {
           title: "Yıllık",
-          price: "$49.99",
-          detail: "Yılda 49.99 dolar · yaklaşık 2 ay avantaj",
+          price: "$29.99",
+          detail: "Yılda 29.99 dolar · yaklaşık 2 ay avantaj",
           badge: "Tasarruflu"
         }
       },
@@ -350,8 +378,7 @@ export const translations: Record<Language, AppCopy> = {
       upgradePremium: "Premium'a Geç",
       notifications: "Bildirimler",
       notificationsBody: "Görev hatırlatmaları için cihaz bildirimlerini kullan.",
-      darkMode: "Gece Modu",
-      darkModeBody: "Görsel tercihini Firebase üzerinde sakla.",
+      notificationPermissionDenied: "Bildirim izni verilmedi. Cihaz ayarlarından TaskAgent bildirimlerini açman gerekiyor.",
       english: "İngilizce",
       turkish: "Türkçe",
       logout: "Çıkış Yap"
@@ -375,9 +402,6 @@ export const translations: Record<Language, AppCopy> = {
       subtasks: "Alt Görevler",
       newSubtask: "Yeni alt görev",
       subtaskPlaceholder: "Alt görev ekle",
-      attachments: "Ekler",
-      noAttachments: "Henüz ek yok.",
-      saveBeforeAttachment: "Önce görevi kaydet, sonra bu cihazdan dosya ekle.",
       saveChanges: "Değişiklikleri Kaydet",
       addTask: "Görevi Ekle",
       untitledTask: "Adsız Odak Noktası"
@@ -389,12 +413,12 @@ export const translations: Record<Language, AppCopy> = {
   en: {
     common: {
       active: "Active",
-      addAttachment: "Add attachment",
       back: "Back",
       completed: "Completed",
       inbox: "Inbox",
       missed: "Missed",
       noDate: "No date",
+      operationFailed: "The action could not be completed. Please try again.",
       premium: "Premium",
       task: "Task"
     },
@@ -436,7 +460,6 @@ export const translations: Record<Language, AppCopy> = {
       editAvatar: "Edit profile image",
       deleteTask: "Delete task",
       addSubtask: "Add subtask",
-      removeAttachment: (fileName) => `Remove ${fileName} attachment`,
       searchTasks: "Search tasks",
       switchToLogin: "Switch to login",
       switchToSignup: "Switch to sign up"
@@ -450,14 +473,13 @@ export const translations: Record<Language, AppCopy> = {
       signupTitle: "Create Your Focus Space.",
       loginSubtitle: "Find your focus again.",
       signupSubtitle: "Start with a calmer task space.",
-      firebaseNotice: "Firebase keys are not configured yet. Demo mode works on iOS and Android.",
+      firebaseNotice: "Firebase keys are not configured yet. Firebase configuration is required to sign in.",
       fullName: "Full name",
       email: "Email",
       password: "Password",
       loginButton: "Continue with Email",
       signupButton: "Create Account",
       forgotPassword: "Forgot Password",
-      demoButton: "Open Demo Space",
       signupLink: "No account yet? Sign up",
       loginLink: "Already have an account? Log in",
       resetNeedsEmail: "Enter your email address to receive a password reset link.",
@@ -509,23 +531,41 @@ export const translations: Record<Language, AppCopy> = {
       eyebrow: "Premium",
       heroTitle: "A Calm Space for Your Digital Focus",
       subtitle: "Unlimited areas, deeper progress signals, and priority support.",
+      paywallSubtitle: "Premium Required",
+      paywallTitle: "Start Your 3-Day Free Trial",
+      paywallBody: "Start a Premium plan through the App Store to use TaskAgent. Your trial is managed by Apple, and you can restore purchases here.",
       choosePlan: "Choose Your Plan",
-      summary: "Monthly plan is 5 dollars. The yearly plan lowers the total cost.",
+      summary: "Monthly plan is 2.99 dollars. Yearly plan is 29.99 dollars.",
       activeBadge: "Active",
+      loadingPlans: "Loading RevenueCat plans.",
+      revenueCatMissingTitle: "RevenueCat configuration is missing",
+      revenueCatMissingBody: "Add the RevenueCat iOS/Android public API keys to the .env file before purchases can start.",
+      plansUnavailableTitle: "No plan found",
+      plansUnavailableBody: "The RevenueCat offering does not include a monthly or yearly package. Check the dashboard products and entitlement setup.",
+      purchaseSuccessTitle: "Premium active",
+      purchaseSuccessBody: "The purchase is complete and your Premium status was updated.",
+      purchaseErrorTitle: "Purchase could not be completed",
+      purchaseErrorBody: "RevenueCat returned an error. Make sure products are active in App Store Connect/Google Play and RevenueCat.",
+      restoreSuccessTitle: "Purchases restored",
+      restoreSuccessBody: "Your Premium subscription was found and applied to your account.",
+      restoreInactiveTitle: "No active subscription found",
+      restoreInactiveBody: "No active TaskAgent Premium subscription was found for this store account.",
+      restoreErrorTitle: "Restore could not be completed",
+      restoreErrorBody: "There was an error restoring purchases. Please try again later.",
       disclosureTitle: "Subscription Information",
       disclosureBody:
         "TaskAgent Premium is an auto-renewable subscription. Payment is charged to your Apple ID account; the subscription renews unless canceled at least 24 hours before the current period ends. You can manage or cancel subscriptions in your App Store account settings.",
       plans: {
         monthly: {
           title: "Monthly",
-          price: "$5",
-          detail: "5 dollars per month · switch anytime",
+          price: "$2.99",
+          detail: "2.99 dollars per month · switch anytime",
           badge: "Flexible"
         },
         yearly: {
           title: "Yearly",
-          price: "$49.99",
-          detail: "49.99 dollars per year · roughly 2 months saved",
+          price: "$29.99",
+          detail: "29.99 dollars per year · roughly 2 months saved",
           badge: "Best value"
         }
       },
@@ -546,8 +586,7 @@ export const translations: Record<Language, AppCopy> = {
       upgradePremium: "Go Premium",
       notifications: "Notifications",
       notificationsBody: "Use device notifications for task reminders.",
-      darkMode: "Dark Mode",
-      darkModeBody: "Store your visual preference in Firebase.",
+      notificationPermissionDenied: "Notification permission was denied. Turn on TaskAgent notifications in device settings.",
       english: "English",
       turkish: "Turkish",
       logout: "Sign Out"
@@ -571,9 +610,6 @@ export const translations: Record<Language, AppCopy> = {
       subtasks: "Subtasks",
       newSubtask: "New subtask",
       subtaskPlaceholder: "Add subtask",
-      attachments: "Attachments",
-      noAttachments: "No attachments yet.",
-      saveBeforeAttachment: "Save the task first, then add a file from this device.",
       saveChanges: "Save Changes",
       addTask: "Add Task",
       untitledTask: "Untitled Focus Point"

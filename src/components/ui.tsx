@@ -2,6 +2,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import React, { PropsWithChildren } from "react";
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   PressableProps,
   StyleProp,
@@ -18,6 +19,8 @@ import { AppCopy } from "../i18n";
 import { Priority, RouteName, Task } from "../types";
 
 export type MaterialIconName = React.ComponentProps<typeof MaterialIcons>["name"];
+
+const appIcon = require("../../assets/icon.png");
 
 const routeItems: Array<{ route: RouteName; icon: MaterialIconName }> = [
   { route: "dashboard", icon: "radio-button-checked" },
@@ -95,7 +98,13 @@ export function TopBar({ title, subtitle, backLabel = "Back", onBack, right }: T
   return (
     <View style={styles.topBar}>
       <View style={styles.topBarSide}>
-        {onBack ? <IconButton icon="arrow-back" label={backLabel} onPress={onBack} /> : <View style={styles.brandMark} />}
+        {onBack ? (
+          <IconButton icon="arrow-back" label={backLabel} onPress={onBack} />
+        ) : (
+          <View style={styles.brandMark}>
+            <Image accessibilityIgnoresInvertColors source={appIcon} style={styles.brandMarkImage} resizeMode="cover" />
+          </View>
+        )}
       </View>
       <View style={styles.topBarTitleWrap}>
         <Text style={styles.topBarTitle}>{title}</Text>
@@ -311,10 +320,15 @@ const styles = StyleSheet.create({
     alignItems: "flex-end"
   },
   brandMark: {
-    backgroundColor: palette.primary,
+    backgroundColor: palette.surfaceContainerLow,
     borderRadius: 16,
     height: 42,
+    overflow: "hidden",
     width: 42
+  },
+  brandMarkImage: {
+    height: "100%",
+    width: "100%"
   },
   topBarTitleWrap: {
     alignItems: "center",

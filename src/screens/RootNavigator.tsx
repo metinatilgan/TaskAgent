@@ -1,9 +1,8 @@
 import { MaterialIcons } from "@expo/vector-icons";
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -15,15 +14,25 @@ import {
   TextInput,
   View
 } from "react-native";
-import * as DocumentPicker from "expo-document-picker";
-import * as ImagePicker from "expo-image-picker";
 import { SafeAreaView } from "react-native-safe-area-context";
+import type { PurchasesOffering, PurchasesPackage } from "react-native-purchases";
 
 import { BottomTabs, Button, Field, IconButton, MaterialIconName, Panel, PriorityBadge, ProgressBar, StatPill, TaskCard, TopBar } from "../components/ui";
 import { legalLinks } from "../config/legal";
 import { useAuth } from "../context/AuthContext";
 import { useTaskAgent } from "../context/TaskContext";
 import { AppCopy, getCopy } from "../i18n";
+import {
+  getRevenueCatCustomerInfo,
+  getRevenueCatOffering,
+  isRevenueCatConfiguredForPlatform,
+  isRevenueCatPurchaseCancelled,
+  planForPackage,
+  premiumStatusFromCustomerInfo,
+  purchaseRevenueCatPackage,
+  restoreRevenueCatPurchases
+} from "../lib/revenuecat";
+import type { PremiumPlanKey } from "../lib/revenuecat";
 import { palette, shadow } from "../theme";
 import { Category, Priority, RouteName, Subtask, Task, TaskDraft, TaskHistoryEntry } from "../types";
 
@@ -37,6 +46,7 @@ const todayIso = () => {
 const dayNumber = () => new Date().getDate().toString().padStart(2, "0");
 const readableDate = (value: string | null, copy: AppCopy) => (value ? value.split("-").reverse().join(".") : copy.common.noDate);
 const createId = () => Math.random().toString(36).slice(2, 10);
+const bypassPremiumPaywall = process.env.EXPO_PUBLIC_BYPASS_PREMIUM_PAYWALL === "true";
 
 const openLegalLink = async (url: string, copy: AppCopy) => {
   try {
@@ -46,20 +56,21 @@ const openLegalLink = async (url: string, copy: AppCopy) => {
   }
 };
 
-const showRestorePurchasesNotice = (copy: AppCopy) => {
-  Alert.alert(copy.legal.restoreTitle, copy.legal.restoreBody);
-};
-
-const showPurchaseSetupNotice = (copy: AppCopy) => {
-  Alert.alert(copy.legal.purchaseSetupTitle, copy.legal.purchaseSetupBody);
-};
-
 export function RootNavigator() {
   const { user, loading } = useAuth();
-  const { profile } = useTaskAgent();
+  const { profile, notificationPermissionDenied, clearNotificationWarning } = useTaskAgent();
   const copy = getCopy(profile.language);
   const [route, setRoute] = useState<RouteName>("dashboard");
   const [taskEditor, setTaskEditor] = useState<{ mode: "new" } | { mode: "edit"; taskId: string } | null>(null);
+
+  useEffect(() => {
+    if (!notificationPermissionDenied) {
+      return;
+    }
+
+    Alert.alert("TaskAgent", copy.settings.notificationPermissionDenied);
+    clearNotificationWarning();
+  }, [clearNotificationWarning, copy.settings.notificationPermissionDenied, notificationPermissionDenied]);
 
   if (loading) {
     return <SplashScreen />;
@@ -67,6 +78,17 @@ export function RootNavigator() {
 
   if (!user) {
     return <AuthScreen copy={copy} />;
+  }
+
+  if (!profile.isPremium && !bypassPremiumPaywall) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <TopBar title="TaskAgent" subtitle={copy.premium.paywallSubtitle} />
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <PremiumScreen copy={copy} locked />
+        </ScrollView>
+      </SafeAreaView>
+    );
   }
 
   if (taskEditor) {
@@ -114,26 +136,37 @@ function SplashScreen() {
 }
 
 function AuthScreen({ copy }: { copy: AppCopy }) {
-  const { error, isFirebaseReady, sendPasswordReset, signInDemo, signInWithEmail, signUpWithEmail, clearError } = useAuth();
+  const {
+    error,
+    isFirebaseReady,
+    sendPasswordReset,
+    signInWithEmail,
+    signUpWithEmail,
+    clearError
+  } = useAuth();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [authMessage, setAuthMessage] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [submitting, setSubmitting] = useState<"email" | "reset" | null>(null);
+
+  const isSubmitting = submitting !== null;
 
   const submit = async () => {
     clearError();
     setAuthMessage(null);
-    setSubmitting(true);
+    setSubmitting("email");
     try {
       if (mode === "login") {
-        await signInWithEmail(email || "demo@taskagent.app", password || "demo-pass");
+        await signInWithEmail(email, password);
       } else {
-        await signUpWithEmail(email || "demo@taskagent.app", password || "demo-pass", fullName || "TaskAgent Demo");
+        await signUpWithEmail(email, password, fullName);
       }
+    } catch {
+      // AuthContext writes the user-facing error.
     } finally {
-      setSubmitting(false);
+      setSubmitting(null);
     }
   };
 
@@ -146,12 +179,16 @@ function AuthScreen({ copy }: { copy: AppCopy }) {
       return;
     }
 
-    setSubmitting(true);
+    setSubmitting("reset");
     try {
-      await sendPasswordReset(email);
-      setAuthMessage(copy.auth.resetSent);
+      const sent = await sendPasswordReset(email);
+      if (sent) {
+        setAuthMessage(copy.auth.resetSent);
+      }
+    } catch {
+      // AuthContext writes the user-facing error.
     } finally {
-      setSubmitting(false);
+      setSubmitting(null);
     }
   };
 
@@ -179,9 +216,16 @@ function AuthScreen({ copy }: { copy: AppCopy }) {
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           {authMessage ? <Text style={styles.successText}>{authMessage}</Text> : null}
 
-          <Button label={mode === "login" ? copy.auth.loginButton : copy.auth.signupButton} icon="arrow-forward" loading={submitting} onPress={submit} />
-          {mode === "login" ? <Button label={copy.auth.forgotPassword} icon="lock-reset" variant="ghost" onPress={resetPassword} /> : null}
-          <Button label={copy.auth.demoButton} icon="visibility" variant="secondary" onPress={signInDemo} />
+          <Button
+            label={mode === "login" ? copy.auth.loginButton : copy.auth.signupButton}
+            icon="arrow-forward"
+            loading={submitting === "email"}
+            disabled={isSubmitting}
+            onPress={submit}
+          />
+          {mode === "login" ? (
+            <Button label={copy.auth.forgotPassword} icon="lock-reset" variant="ghost" loading={submitting === "reset"} disabled={isSubmitting} onPress={resetPassword} />
+          ) : null}
 
           <Pressable
             accessibilityRole="button"
@@ -407,8 +451,12 @@ function CategoriesScreen({ copy }: { copy: AppCopy }) {
   const [name, setName] = useState("");
 
   const submit = async () => {
-    await addCategory(name);
-    setName("");
+    try {
+      await addCategory(name);
+      setName("");
+    } catch {
+      Alert.alert("TaskAgent", copy.common.operationFailed);
+    }
   };
 
   return (
@@ -434,35 +482,195 @@ function CategoriesScreen({ copy }: { copy: AppCopy }) {
   );
 }
 
-function PremiumScreen({ copy }: { copy: AppCopy }) {
-  const { profile } = useTaskAgent();
-  const premiumPlans = [
+const revenueCatPackageForPlan = (offering: PurchasesOffering | null, plan: PremiumPlanKey): PurchasesPackage | null => {
+  if (!offering) {
+    return null;
+  }
+
+  if (plan === "monthly") {
+    return offering.monthly || offering.availablePackages.find((item) => planForPackage(item) === "monthly") || null;
+  }
+
+  return offering.annual || offering.availablePackages.find((item) => planForPackage(item) === "yearly") || null;
+};
+
+function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boolean }) {
+  const { user } = useAuth();
+  const { profile, updateProfile } = useTaskAgent();
+  const revenueCatConfigured = isRevenueCatConfiguredForPlatform();
+  const [offering, setOffering] = useState<PurchasesOffering | null>(null);
+  const [loadingPlans, setLoadingPlans] = useState(false);
+  const [premiumNotice, setPremiumNotice] = useState<string | null>(revenueCatConfigured ? null : copy.premium.revenueCatMissingBody);
+  const [purchasingPlan, setPurchasingPlan] = useState<PremiumPlanKey | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const [managementUrl, setManagementUrl] = useState<string | null>(null);
+  const planPackages = useMemo(
+    () => ({
+      monthly: revenueCatPackageForPlan(offering, "monthly"),
+      yearly: revenueCatPackageForPlan(offering, "yearly")
+    }),
+    [offering]
+  );
+  const premiumPlans = ([
     {
       key: "monthly",
-      ...copy.premium.plans.monthly
+      ...copy.premium.plans.monthly,
+      package: planPackages.monthly
     },
     {
       key: "yearly",
-      ...copy.premium.plans.yearly
+      ...copy.premium.plans.yearly,
+      package: planPackages.yearly
     }
-  ] as const;
+  ] as const).map((plan) => ({
+    ...plan,
+    price: plan.package?.product.priceString || plan.price
+  }));
+
+  useEffect(() => {
+    let active = true;
+
+    const loadRevenueCat = async () => {
+      if (!revenueCatConfigured) {
+        setPremiumNotice(copy.premium.revenueCatMissingBody);
+        return;
+      }
+
+      if (!user || user.isDemo) {
+        return;
+      }
+
+      setLoadingPlans(true);
+      setPremiumNotice(null);
+
+      try {
+        const [nextOffering, customerInfo] = await Promise.all([getRevenueCatOffering(user.uid), getRevenueCatCustomerInfo(user.uid)]);
+
+        if (!active) {
+          return;
+        }
+
+        setOffering(nextOffering);
+
+        if (customerInfo) {
+          const status = premiumStatusFromCustomerInfo(customerInfo);
+          setManagementUrl(status.managementUrl);
+          await updateProfile({
+            isPremium: status.isPremium,
+            premiumPlan: status.premiumPlan,
+            premiumExpiresAt: status.premiumExpiresAt
+          });
+        }
+
+        if (!nextOffering?.monthly && !nextOffering?.annual && !nextOffering?.availablePackages.length) {
+          setPremiumNotice(copy.premium.plansUnavailableBody);
+        }
+      } catch (cause) {
+        console.warn("RevenueCat plans could not be loaded.", cause);
+        if (active) {
+          setPremiumNotice(copy.premium.purchaseErrorBody);
+        }
+      } finally {
+        if (active) {
+          setLoadingPlans(false);
+        }
+      }
+    };
+
+    void loadRevenueCat();
+
+    return () => {
+      active = false;
+    };
+  }, [copy.premium.plansUnavailableBody, copy.premium.purchaseErrorBody, copy.premium.revenueCatMissingBody, revenueCatConfigured, user?.uid]);
+
+  const applyCustomerInfo = async (customerInfo: NonNullable<Awaited<ReturnType<typeof getRevenueCatCustomerInfo>>>, fallbackPlan: PremiumPlanKey | null = null) => {
+    const status = premiumStatusFromCustomerInfo(customerInfo, fallbackPlan);
+    setManagementUrl(status.managementUrl);
+    await updateProfile({
+      isPremium: status.isPremium,
+      premiumPlan: status.premiumPlan,
+      premiumExpiresAt: status.premiumExpiresAt
+    });
+    return status;
+  };
+
+  const purchasePlan = async (plan: PremiumPlanKey, premiumPackage: PurchasesPackage | null) => {
+    if (!user || user.isDemo || !revenueCatConfigured) {
+      Alert.alert(copy.premium.revenueCatMissingTitle, copy.premium.revenueCatMissingBody);
+      return;
+    }
+
+    if (!premiumPackage) {
+      Alert.alert(copy.premium.plansUnavailableTitle, copy.premium.plansUnavailableBody);
+      return;
+    }
+
+    setPurchasingPlan(plan);
+
+    try {
+      const result = await purchaseRevenueCatPackage(user.uid, premiumPackage);
+      const status = await applyCustomerInfo(result.customerInfo, plan);
+      Alert.alert(status.isPremium ? copy.premium.purchaseSuccessTitle : copy.premium.purchaseErrorTitle, status.isPremium ? copy.premium.purchaseSuccessBody : copy.premium.purchaseErrorBody);
+    } catch (cause) {
+      if (!isRevenueCatPurchaseCancelled(cause)) {
+        console.warn("RevenueCat purchase failed.", cause);
+        Alert.alert(copy.premium.purchaseErrorTitle, copy.premium.purchaseErrorBody);
+      }
+    } finally {
+      setPurchasingPlan(null);
+    }
+  };
+
+  const restorePurchases = async () => {
+    if (!user || user.isDemo || !revenueCatConfigured) {
+      Alert.alert(copy.premium.revenueCatMissingTitle, copy.premium.revenueCatMissingBody);
+      return;
+    }
+
+    setRestoring(true);
+
+    try {
+      const customerInfo = await restoreRevenueCatPurchases(user.uid);
+      const status = await applyCustomerInfo(customerInfo);
+      Alert.alert(status.isPremium ? copy.premium.restoreSuccessTitle : copy.premium.restoreInactiveTitle, status.isPremium ? copy.premium.restoreSuccessBody : copy.premium.restoreInactiveBody);
+    } catch (cause) {
+      console.warn("RevenueCat restore failed.", cause);
+      Alert.alert(copy.premium.restoreErrorTitle, copy.premium.restoreErrorBody);
+    } finally {
+      setRestoring(false);
+    }
+  };
 
   return (
     <View style={styles.stack}>
       <View>
         <Text style={styles.eyebrow}>{copy.premium.eyebrow}</Text>
-        <Text style={styles.heroTitle}>{copy.premium.heroTitle}</Text>
-        <Text style={styles.heroSubtitle}>{copy.premium.subtitle}</Text>
+        <Text style={styles.heroTitle}>{locked ? copy.premium.paywallTitle : copy.premium.heroTitle}</Text>
+        <Text style={styles.heroSubtitle}>{locked ? copy.premium.paywallBody : copy.premium.subtitle}</Text>
       </View>
 
       <Panel style={styles.premiumHero}>
         <MaterialIcons name="auto-awesome" size={30} color={palette.onTertiaryContainer} />
         <Text style={styles.sectionTitle}>{copy.premium.choosePlan}</Text>
         <Text style={styles.settingBody}>{copy.premium.summary}</Text>
+        {loadingPlans ? (
+          <View style={styles.notice}>
+            <ActivityIndicator color={palette.primary} />
+            <Text style={styles.noticeText}>{copy.premium.loadingPlans}</Text>
+          </View>
+        ) : null}
+        {premiumNotice ? (
+          <View style={styles.notice}>
+            <MaterialIcons name="info-outline" size={18} color={palette.primary} />
+            <Text style={styles.noticeText}>{premiumNotice}</Text>
+          </View>
+        ) : null}
 
         <View style={styles.planGrid}>
           {premiumPlans.map((plan) => {
             const selected = profile.isPremium && profile.premiumPlan === plan.key;
+            const loading = purchasingPlan === plan.key;
 
             return (
               <Pressable
@@ -470,15 +678,16 @@ function PremiumScreen({ copy }: { copy: AppCopy }) {
                 accessibilityRole="button"
                 accessibilityLabel={copy.a11y.selectPremiumPlan(plan.title)}
                 accessibilityState={{ selected }}
-                onPress={() => showPurchaseSetupNotice(copy)}
-                style={({ pressed }) => [styles.planOption, selected && styles.planOptionActive, pressed && styles.pressed]}
+                disabled={loadingPlans || restoring || Boolean(purchasingPlan)}
+                onPress={() => purchasePlan(plan.key, plan.package)}
+                style={({ pressed }) => [styles.planOption, selected && styles.planOptionActive, (loadingPlans || restoring || Boolean(purchasingPlan)) && styles.disabled, pressed && styles.pressed]}
               >
                 <View style={styles.flex}>
                   <Text style={styles.planTitle}>{plan.title}</Text>
                   <Text style={styles.planDetail}>{plan.detail}</Text>
                 </View>
                 <View style={styles.planPriceWrap}>
-                  <Text style={styles.premiumPrice}>{plan.price}</Text>
+                  {loading ? <ActivityIndicator color={palette.primary} /> : <Text style={styles.premiumPrice}>{plan.price}</Text>}
                   <Text style={[styles.planBadge, selected && styles.planBadgeActive]}>{selected ? copy.premium.activeBadge : plan.badge}</Text>
                 </View>
               </Pressable>
@@ -490,13 +699,15 @@ function PremiumScreen({ copy }: { copy: AppCopy }) {
       <Panel style={styles.stackSmall}>
         <Text style={styles.sectionTitle}>{copy.premium.disclosureTitle}</Text>
         <Text style={styles.settingBody}>{copy.premium.disclosureBody}</Text>
-        <Button label={copy.legal.restorePurchases} icon="restore" variant="ghost" onPress={() => showRestorePurchasesNotice(copy)} />
-        <Button label={copy.legal.manageSubscription} icon="settings" variant="ghost" onPress={() => openLegalLink(legalLinks.manageSubscriptions, copy)} />
+        <Button label={copy.legal.restorePurchases} icon="restore" variant="ghost" loading={restoring} disabled={Boolean(purchasingPlan)} onPress={restorePurchases} />
+        <Button label={copy.legal.manageSubscription} icon="settings" variant="ghost" onPress={() => openLegalLink(managementUrl || legalLinks.manageSubscriptions, copy)} />
         <View style={styles.legalLinkRow}>
           <Button label={copy.legal.termsOfUse} icon="article" variant="secondary" style={styles.legalButton} onPress={() => openLegalLink(legalLinks.terms, copy)} />
           <Button label={copy.legal.privacyPolicy} icon="privacy-tip" variant="secondary" style={styles.legalButton} onPress={() => openLegalLink(legalLinks.privacy, copy)} />
         </View>
         <Button label={copy.legal.subscriptionTerms} icon="workspace-premium" variant="secondary" onPress={() => openLegalLink(legalLinks.subscriptionTerms, copy)} />
+        <Button label={copy.legal.support} icon="support-agent" variant="ghost" onPress={() => openLegalLink(legalLinks.support, copy)} />
+        <Button label={copy.legal.accountDeletion} icon="delete-forever" variant="danger" onPress={() => openLegalLink(legalLinks.accountDeletion, copy)} />
       </Panel>
 
       <View style={styles.featureGrid}>
@@ -511,44 +722,21 @@ function PremiumScreen({ copy }: { copy: AppCopy }) {
 
 function SettingsScreen({ copy, onOpenPremium }: { copy: AppCopy; onOpenPremium: () => void }) {
   const { signOut } = useAuth();
-  const { profile, updateProfile, uploadProfileAvatar } = useTaskAgent();
+  const { profile, updateProfile } = useTaskAgent();
   const [fullName, setFullName] = useState(profile.fullName);
   const [jobTitle, setJobTitle] = useState(profile.jobTitle);
 
-  const pickAvatar = async () => {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-    if (!permission.granted) {
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      allowsEditing: true,
-      aspect: [1, 1],
-      mediaTypes: ["images"],
-      quality: 0.82
-    });
-
-    if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      await uploadProfileAvatar({
-        uri: asset.uri,
-        name: asset.fileName || `avatar-${Date.now()}.jpg`,
-        mimeType: asset.mimeType || "image/jpeg",
-        size: asset.fileSize
-      });
-    }
-  };
+  useEffect(() => {
+    setFullName(profile.fullName);
+    setJobTitle(profile.jobTitle);
+  }, [profile.fullName, profile.jobTitle]);
 
   return (
     <View style={styles.stack}>
       <View style={styles.profileHeader}>
-        <Pressable accessibilityRole="button" accessibilityLabel={copy.a11y.editAvatar} onPress={pickAvatar} style={styles.avatarPressable}>
-          {profile.avatarUrl ? <Image source={{ uri: profile.avatarUrl }} style={styles.avatarImage} /> : <Text style={styles.avatarText}>{profile.fullName.slice(0, 2).toUpperCase()}</Text>}
-          <View style={styles.avatarEditBadge}>
-            <MaterialIcons name="edit" size={16} color={palette.onPrimary} />
-          </View>
-        </Pressable>
+        <View style={styles.avatarPressable}>
+          <Text style={styles.avatarText}>{profile.fullName.slice(0, 2).toUpperCase()}</Text>
+        </View>
         <Text style={styles.heroTitle}>{profile.fullName}</Text>
         <Text style={styles.heroSubtitle}>{profile.email}</Text>
       </View>
@@ -579,7 +767,6 @@ function SettingsScreen({ copy, onOpenPremium }: { copy: AppCopy; onOpenPremium:
           value={profile.pushNotifications}
           onValueChange={(pushNotifications) => updateProfile({ pushNotifications })}
         />
-        <SettingRow title={copy.settings.darkMode} body={copy.settings.darkModeBody} value={profile.darkMode} onValueChange={(darkMode) => updateProfile({ darkMode })} />
         <View style={styles.languageRow}>
           <Button label={copy.settings.english} variant={profile.language === "en" ? "primary" : "ghost"} onPress={() => updateProfile({ language: "en" })} />
           <Button label={copy.settings.turkish} variant={profile.language === "tr" ? "primary" : "ghost"} onPress={() => updateProfile({ language: "tr" })} />
@@ -611,7 +798,7 @@ function TaskEditorScreen({
   onClose: () => void;
   onCreated: (taskId: string) => void;
 }) {
-  const { addTask, addTaskAttachment, categories, deleteTask, removeTaskAttachment, tasks, updateTask } = useTaskAgent();
+  const { addTask, categories, deleteTask, tasks, updateTask } = useTaskAgent();
   const existing = taskId ? tasks.find((task) => task.id === taskId) : null;
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const [draft, setDraft] = useState<TaskDraft>(() => {
@@ -630,7 +817,6 @@ function TaskEditorScreen({
           repeat: existing.repeat,
           lastDailyRefresh: existing.lastDailyRefresh,
           subtasks: existing.subtasks,
-          attachments: existing.attachments,
           completionHistory: existing.completionHistory
         }
       : {
@@ -646,7 +832,6 @@ function TaskEditorScreen({
           repeat: "none",
           lastDailyRefresh: null,
           subtasks: [],
-          attachments: [],
           completionHistory: []
         };
   });
@@ -661,20 +846,28 @@ function TaskEditorScreen({
       lastDailyRefresh: draft.repeat === "daily" ? draft.lastDailyRefresh || draft.dueDate || todayIso() : null
     };
 
-    if (existing) {
-      await updateTask(existing.id, payload);
-      onClose();
-    } else {
-      const id = await addTask(payload);
-      onCreated(id);
+    try {
+      if (existing) {
+        await updateTask(existing.id, payload);
+        onClose();
+      } else {
+        const id = await addTask(payload);
+        onCreated(id);
+      }
+    } catch {
+      Alert.alert("TaskAgent", copy.common.operationFailed);
     }
   };
 
   const remove = async () => {
-    if (existing) {
-      await deleteTask(existing.id);
+    try {
+      if (existing) {
+        await deleteTask(existing.id);
+      }
+      onClose();
+    } catch {
+      Alert.alert("TaskAgent", copy.common.operationFailed);
     }
-    onClose();
   };
 
   const addSubtask = () => {
@@ -692,27 +885,6 @@ function TaskEditorScreen({
     };
     setDraft((current) => ({ ...current, subtasks: [...(current.subtasks || []), next] }));
     setSubtaskTitle("");
-  };
-
-  const pickAttachment = async () => {
-    if (!existing) {
-      return;
-    }
-
-    const result = await DocumentPicker.getDocumentAsync({
-      copyToCacheDirectory: true,
-      type: "*/*"
-    });
-
-    if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      await addTaskAttachment(existing.id, {
-        uri: asset.uri,
-        name: asset.name,
-        mimeType: asset.mimeType,
-        size: asset.size
-      });
-    }
   };
 
   return (
@@ -833,39 +1005,6 @@ function TaskEditorScreen({
             </View>
           </Panel>
 
-          <Panel style={styles.stackSmall}>
-            <View style={styles.rowBetween}>
-              <Text style={styles.sectionTitle}>{copy.editor.attachments}</Text>
-              <IconButton icon="attach-file" label={copy.common.addAttachment} tone="primary" onPress={pickAttachment} disabled={!existing} />
-            </View>
-            {existing ? (
-              existing.attachments.length ? (
-                existing.attachments.map((attachment) => (
-                  <View key={attachment.id} style={styles.attachmentRow}>
-                    <View style={styles.attachmentPreview}>
-                      {attachment.fileType.startsWith("image/") ? (
-                        <Image source={{ uri: attachment.fileUrl }} style={styles.attachmentImage} />
-                      ) : (
-                        <MaterialIcons name="insert-drive-file" size={22} color={palette.primary} />
-                      )}
-                    </View>
-                    <View style={styles.flex}>
-                      <Text numberOfLines={1} style={styles.attachmentTitle}>
-                        {attachment.fileName}
-                      </Text>
-                      <Text style={styles.attachmentMeta}>{attachment.fileType}</Text>
-                    </View>
-                    <IconButton icon="close" label={copy.a11y.removeAttachment(attachment.fileName)} onPress={() => removeTaskAttachment(existing.id, attachment.id)} />
-                  </View>
-                ))
-              ) : (
-                <Text style={styles.attachmentEmpty}>{copy.editor.noAttachments}</Text>
-              )
-            ) : (
-              <Text style={styles.attachmentEmpty}>{copy.editor.saveBeforeAttachment}</Text>
-            )}
-          </Panel>
-
           <Button label={existing ? copy.editor.saveChanges : copy.editor.addTask} icon="check" onPress={save} />
         </ScrollView>
       </KeyboardAvoidingView>
@@ -941,6 +1080,9 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.72
+  },
+  disabled: {
+    opacity: 0.5
   },
   scrollContent: {
     paddingBottom: 112,
@@ -1242,14 +1384,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8
   },
-  avatarLarge: {
-    alignItems: "center",
-    backgroundColor: palette.primaryContainer,
-    borderRadius: 50,
-    height: 100,
-    justifyContent: "center",
-    width: 100
-  },
   avatarPressable: {
     alignItems: "center",
     backgroundColor: palette.primaryContainer,
@@ -1258,22 +1392,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "visible",
     width: 100
-  },
-  avatarImage: {
-    borderRadius: 50,
-    height: 100,
-    width: 100
-  },
-  avatarEditBadge: {
-    alignItems: "center",
-    backgroundColor: palette.primary,
-    borderRadius: 16,
-    bottom: 0,
-    height: 32,
-    justifyContent: "center",
-    position: "absolute",
-    right: 0,
-    width: 32
   },
   avatarText: {
     color: palette.onPrimaryContainer,
@@ -1391,45 +1509,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     minHeight: 48,
     paddingHorizontal: 14
-  },
-  attachmentRow: {
-    alignItems: "center",
-    backgroundColor: palette.surfaceContainerLow,
-    borderRadius: 20,
-    flexDirection: "row",
-    gap: 12,
-    minHeight: 66,
-    padding: 10
-  },
-  attachmentPreview: {
-    alignItems: "center",
-    backgroundColor: palette.surfaceContainerLowest,
-    borderRadius: 16,
-    height: 46,
-    justifyContent: "center",
-    overflow: "hidden",
-    width: 46
-  },
-  attachmentImage: {
-    height: 46,
-    width: 46
-  },
-  attachmentTitle: {
-    color: palette.onSurface,
-    fontSize: 14,
-    fontWeight: "900"
-  },
-  attachmentMeta: {
-    color: palette.onSurfaceVariant,
-    fontSize: 11,
-    fontWeight: "700",
-    marginTop: 2
-  },
-  attachmentEmpty: {
-    color: palette.onSurfaceVariant,
-    fontSize: 13,
-    fontWeight: "800",
-    lineHeight: 19
   },
   historyRow: {
     alignItems: "center",
