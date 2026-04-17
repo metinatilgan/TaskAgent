@@ -14,6 +14,7 @@ import {
 import { FirebaseError } from "firebase/app";
 import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc, writeBatch } from "firebase/firestore";
 
+import { permanentPremiumProfilePatch } from "../config/permanentPremium";
 import { demoCategories, demoProfile } from "../data/demo";
 import { auth, db, isFirebaseConfigured } from "../lib/firebase";
 import { AppUser } from "../types";
@@ -88,11 +89,17 @@ const cleanProfileSeed = (user: User, fullName?: string) => ({
   pushNotifications: true,
   isPremium: false,
   premiumPlan: null,
-  premiumExpiresAt: null
+  premiumExpiresAt: null,
+  ...permanentPremiumProfilePatch(user.email)
 });
 
 const needsDemoProfileRepair = (value: Record<string, unknown>) =>
   value.email === demoProfile.email || value.fullName === demoProfile.fullName || value.jobTitle === demoProfile.jobTitle;
+
+const needsPermanentPremiumRepair = (user: User, value: Record<string, unknown>) => {
+  const patch = permanentPremiumProfilePatch(user.email);
+  return Object.entries(patch).some(([key, nextValue]) => value[key] !== nextValue);
+};
 
 async function createProfileIfNeeded(user: User, fullName?: string) {
   const firestore = db;
@@ -128,20 +135,31 @@ async function createProfileIfNeeded(user: User, fullName?: string) {
           )
         )
       );
-    } else if (needsDemoProfileRepair(existing.data())) {
-      const seed = cleanProfileSeed(user, fullName);
-      await setDoc(
-        userRef,
-        {
-          uid: user.uid,
-          email: seed.email,
-          fullName: seed.fullName || user.email || "",
-          avatarUrl: seed.avatarUrl,
-          jobTitle: "",
-          updatedAt: serverTimestamp()
-        },
-        { merge: true }
-      );
+    } else {
+      const existingData = existing.data();
+      const repairPatch: Record<string, unknown> = {
+        uid: user.uid,
+        ...permanentPremiumProfilePatch(user.email)
+      };
+
+      if (needsDemoProfileRepair(existingData)) {
+        const seed = cleanProfileSeed(user, fullName);
+        repairPatch.email = seed.email;
+        repairPatch.fullName = seed.fullName || user.email || "";
+        repairPatch.avatarUrl = seed.avatarUrl;
+        repairPatch.jobTitle = "";
+      }
+
+      if (needsDemoProfileRepair(existingData) || needsPermanentPremiumRepair(user, existingData)) {
+        await setDoc(
+          userRef,
+          {
+            ...repairPatch,
+            updatedAt: serverTimestamp()
+          },
+          { merge: true }
+        );
+      }
     }
   } catch (cause) {
     if (isFirestoreOfflineError(cause)) {

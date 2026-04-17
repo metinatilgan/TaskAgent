@@ -13,6 +13,7 @@ import {
   updateDoc
 } from "firebase/firestore";
 
+import { permanentPremiumProfilePatch } from "../config/permanentPremium";
 import { demoCategories, demoProfile, demoTasks } from "../data/demo";
 import { db } from "../lib/firebase";
 import {
@@ -257,6 +258,7 @@ const defaultProfileForUser = (user: AppUser): UserProfile => {
     isPremium: false,
     premiumPlan: null,
     premiumExpiresAt: null,
+    ...permanentPremiumProfilePatch(user.email),
     createdAt: now,
     updatedAt: now
   };
@@ -284,6 +286,8 @@ const profileForAuthenticatedUser = (user: AppUser, value: Partial<UserProfile> 
     nextProfile.avatarUrl = fallback.avatarUrl;
   }
 
+  Object.assign(nextProfile, permanentPremiumProfilePatch(user.email || nextProfile.email));
+
   return nextProfile;
 };
 
@@ -305,6 +309,14 @@ const profileRepairPatch = (source: Partial<UserProfile>, sanitized: UserProfile
   if (!source.avatarUrl && sanitized.avatarUrl) {
     patch.avatarUrl = sanitized.avatarUrl;
   }
+
+  const premiumPatch = permanentPremiumProfilePatch(sanitized.email);
+  Object.entries(premiumPatch).forEach(([key, value]) => {
+    const profileKey = key as keyof UserProfile;
+    if (source[profileKey] !== value) {
+      patch[profileKey] = value as never;
+    }
+  });
 
   return patch;
 };
