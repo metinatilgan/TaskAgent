@@ -361,6 +361,10 @@ def main() -> None:
                 image = build(locale, size_key, size, file_prefix, screen)
                 image.save(target / f"{file_prefix}.png", optimize=True)
 
+    from generate_ipad_native_screenshots import main as generate_ipad_native
+
+    generate_ipad_native()
+
 
 if __name__ == "__main__":
     main()

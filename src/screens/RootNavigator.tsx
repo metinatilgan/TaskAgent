@@ -1,5 +1,5 @@
 import { MaterialIcons } from "@expo/vector-icons";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -565,6 +565,7 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
   const { user } = useAuth();
   const { profile, updateProfile } = useTaskAgent();
   const revenueCatConfigured = isRevenueCatConfiguredForPlatform();
+  const mountedRef = useRef(true);
   const [offering, setOffering] = useState<PurchasesOffering | null>(null);
   const [loadingPlans, setLoadingPlans] = useState(false);
   const [premiumNotice, setPremiumNotice] = useState<string | null>(revenueCatConfigured ? null : copy.premium.revenueCatMissingBody);
@@ -594,62 +595,71 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
     price: plan.package?.product.priceString || plan.price
   }));
 
+  useEffect(
+    () => () => {
+      mountedRef.current = false;
+    },
+    []
+  );
+
+  const loadRevenueCat = useCallback(async () => {
+    if (!revenueCatConfigured) {
+      setPremiumNotice(copy.premium.revenueCatMissingBody);
+      return;
+    }
+
+    if (!user || user.isDemo) {
+      return;
+    }
+
+    setLoadingPlans(true);
+    setPremiumNotice(null);
+
+    try {
+      const [nextOffering, customerInfo] = await Promise.all([getRevenueCatOffering(user.uid), getRevenueCatCustomerInfo(user.uid)]);
+
+      if (!mountedRef.current) {
+        return;
+      }
+
+      setOffering(nextOffering);
+
+      if (customerInfo) {
+        const status = premiumStatusFromCustomerInfo(customerInfo);
+        setManagementUrl(status.managementUrl);
+        await updateProfile({
+          isPremium: status.isPremium,
+          premiumPlan: status.premiumPlan,
+          premiumExpiresAt: status.premiumExpiresAt
+        });
+      }
+
+      const hasPackages = Boolean(nextOffering?.monthly || nextOffering?.annual || nextOffering?.availablePackages.length);
+      if (!hasPackages) {
+        setPremiumNotice(copy.premium.plansUnavailableBody);
+      }
+    } catch (cause) {
+      console.warn("RevenueCat plans could not be loaded.", cause);
+      if (mountedRef.current) {
+        setPremiumNotice(copy.premium.purchaseErrorBody);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setLoadingPlans(false);
+      }
+    }
+  }, [
+    copy.premium.plansUnavailableBody,
+    copy.premium.purchaseErrorBody,
+    copy.premium.revenueCatMissingBody,
+    revenueCatConfigured,
+    updateProfile,
+    user
+  ]);
+
   useEffect(() => {
-    let active = true;
-
-    const loadRevenueCat = async () => {
-      if (!revenueCatConfigured) {
-        setPremiumNotice(copy.premium.revenueCatMissingBody);
-        return;
-      }
-
-      if (!user || user.isDemo) {
-        return;
-      }
-
-      setLoadingPlans(true);
-      setPremiumNotice(null);
-
-      try {
-        const [nextOffering, customerInfo] = await Promise.all([getRevenueCatOffering(user.uid), getRevenueCatCustomerInfo(user.uid)]);
-
-        if (!active) {
-          return;
-        }
-
-        setOffering(nextOffering);
-
-        if (customerInfo) {
-          const status = premiumStatusFromCustomerInfo(customerInfo);
-          setManagementUrl(status.managementUrl);
-          await updateProfile({
-            isPremium: status.isPremium,
-            premiumPlan: status.premiumPlan,
-            premiumExpiresAt: status.premiumExpiresAt
-          });
-        }
-
-        if (!nextOffering?.monthly && !nextOffering?.annual && !nextOffering?.availablePackages.length) {
-          setPremiumNotice(copy.premium.plansUnavailableBody);
-        }
-      } catch (cause) {
-        console.warn("RevenueCat plans could not be loaded.", cause);
-        if (active) {
-          setPremiumNotice(copy.premium.purchaseErrorBody);
-        }
-      } finally {
-        if (active) {
-          setLoadingPlans(false);
-        }
-      }
-    };
-
     void loadRevenueCat();
-
-    return () => {
-      active = false;
-    };
-  }, [copy.premium.plansUnavailableBody, copy.premium.purchaseErrorBody, copy.premium.revenueCatMissingBody, revenueCatConfigured, user?.uid]);
+  }, [loadRevenueCat]);
 
   const applyCustomerInfo = async (customerInfo: NonNullable<Awaited<ReturnType<typeof getRevenueCatCustomerInfo>>>, fallbackPlan: PremiumPlanKey | null = null) => {
     const status = premiumStatusFromCustomerInfo(customerInfo, fallbackPlan);
@@ -733,11 +743,24 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
             <Text style={styles.noticeText}>{premiumNotice}</Text>
           </View>
         ) : null}
+        {revenueCatConfigured && premiumNotice ? (
+          <Button
+            label={copy.common.retry}
+            icon="refresh"
+            variant="ghost"
+            disabled={loadingPlans || restoring || Boolean(purchasingPlan)}
+            onPress={() => {
+              void loadRevenueCat();
+            }}
+          />
+        ) : null}
 
         <View style={styles.planGrid}>
           {premiumPlans.map((plan) => {
             const selected = profile.isPremium && profile.premiumPlan === plan.key;
             const loading = purchasingPlan === plan.key;
+            const unavailable = !plan.package;
+            const disabled = unavailable || loadingPlans || restoring || Boolean(purchasingPlan);
 
             return (
               <Pressable
@@ -745,9 +768,9 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
                 accessibilityRole="button"
                 accessibilityLabel={copy.a11y.selectPremiumPlan(plan.title)}
                 accessibilityState={{ selected }}
-                disabled={loadingPlans || restoring || Boolean(purchasingPlan)}
+                disabled={disabled}
                 onPress={() => purchasePlan(plan.key, plan.package)}
-                style={({ pressed }) => [styles.planOption, selected && styles.planOptionActive, (loadingPlans || restoring || Boolean(purchasingPlan)) && styles.disabled, pressed && styles.pressed]}
+                style={({ pressed }) => [styles.planOption, selected && styles.planOptionActive, disabled && styles.disabled, pressed && !disabled && styles.pressed]}
               >
                 <View style={styles.flex}>
                   <Text style={styles.planTitle}>{plan.title}</Text>

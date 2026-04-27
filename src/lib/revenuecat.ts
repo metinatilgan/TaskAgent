@@ -66,7 +66,15 @@ export async function getRevenueCatOffering(appUserId?: string | null): Promise<
   }
 
   const offerings = await Purchases.getOfferings();
-  return offerings.current;
+  if (offerings.current) {
+    return offerings.current;
+  }
+
+  return (
+    Object.values(offerings.all).find(
+      (offering) => Boolean(offering.monthly || offering.annual || offering.availablePackages.length)
+    ) || null
+  );
 }
 
 export async function getRevenueCatCustomerInfo(appUserId?: string | null) {

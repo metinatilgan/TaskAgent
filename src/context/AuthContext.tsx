@@ -14,7 +14,7 @@ import {
 import { FirebaseError } from "firebase/app";
 import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc, writeBatch } from "firebase/firestore";
 
-import { permanentPremiumProfilePatch } from "../config/permanentPremium";
+import { clearLegacyPermanentPremiumProfilePatch, permanentPremiumProfilePatch } from "../config/permanentPremium";
 import { demoCategories, demoProfile } from "../data/demo";
 import { auth, db, isFirebaseConfigured } from "../lib/firebase";
 import { AppUser } from "../types";
@@ -101,6 +101,16 @@ const needsPermanentPremiumRepair = (user: User, value: Record<string, unknown>)
   return Object.entries(patch).some(([key, nextValue]) => value[key] !== nextValue);
 };
 
+const needsLegacyPermanentPremiumCleanup = (user: User, value: Record<string, unknown>) => {
+  const patch = clearLegacyPermanentPremiumProfilePatch({
+    email: user.email,
+    isPremium: Boolean(value.isPremium),
+    premiumPlan: value.premiumPlan === "monthly" || value.premiumPlan === "yearly" ? value.premiumPlan : null,
+    premiumExpiresAt: typeof value.premiumExpiresAt === "string" ? value.premiumExpiresAt : null
+  });
+  return Object.keys(patch).length > 0;
+};
+
 async function createProfileIfNeeded(user: User, fullName?: string) {
   const firestore = db;
 
@@ -139,6 +149,12 @@ async function createProfileIfNeeded(user: User, fullName?: string) {
       const existingData = existing.data();
       const repairPatch: Record<string, unknown> = {
         uid: user.uid,
+        ...clearLegacyPermanentPremiumProfilePatch({
+          email: user.email,
+          isPremium: Boolean(existingData.isPremium),
+          premiumPlan: existingData.premiumPlan === "monthly" || existingData.premiumPlan === "yearly" ? existingData.premiumPlan : null,
+          premiumExpiresAt: typeof existingData.premiumExpiresAt === "string" ? existingData.premiumExpiresAt : null
+        }),
         ...permanentPremiumProfilePatch(user.email)
       };
 
@@ -150,7 +166,7 @@ async function createProfileIfNeeded(user: User, fullName?: string) {
         repairPatch.jobTitle = "";
       }
 
-      if (needsDemoProfileRepair(existingData) || needsPermanentPremiumRepair(user, existingData)) {
+      if (needsDemoProfileRepair(existingData) || needsLegacyPermanentPremiumCleanup(user, existingData) || needsPermanentPremiumRepair(user, existingData)) {
         await setDoc(
           userRef,
           {

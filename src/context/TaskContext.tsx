@@ -13,7 +13,7 @@ import {
   updateDoc
 } from "firebase/firestore";
 
-import { permanentPremiumProfilePatch } from "../config/permanentPremium";
+import { clearLegacyPermanentPremiumProfilePatch, permanentPremiumProfilePatch } from "../config/permanentPremium";
 import { demoCategories, demoProfile, demoTasks } from "../data/demo";
 import { db } from "../lib/firebase";
 import {
@@ -286,6 +286,7 @@ const profileForAuthenticatedUser = (user: AppUser, value: Partial<UserProfile> 
     nextProfile.avatarUrl = fallback.avatarUrl;
   }
 
+  Object.assign(nextProfile, clearLegacyPermanentPremiumProfilePatch(nextProfile));
   Object.assign(nextProfile, permanentPremiumProfilePatch(user.email || nextProfile.email));
 
   return nextProfile;
@@ -310,7 +311,10 @@ const profileRepairPatch = (source: Partial<UserProfile>, sanitized: UserProfile
     patch.avatarUrl = sanitized.avatarUrl;
   }
 
-  const premiumPatch = permanentPremiumProfilePatch(sanitized.email);
+  const premiumPatch = {
+    ...clearLegacyPermanentPremiumProfilePatch(sanitized),
+    ...permanentPremiumProfilePatch(sanitized.email)
+  };
   Object.entries(premiumPatch).forEach(([key, value]) => {
     const profileKey = key as keyof UserProfile;
     if (source[profileKey] !== value) {

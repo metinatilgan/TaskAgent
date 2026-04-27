@@ -12,6 +12,7 @@ export interface AppCopy {
     noDate: string;
     operationFailed: string;
     premium: string;
+    retry: string;
     task: string;
   };
   legal: {
@@ -224,6 +225,7 @@ export const translations: Record<Language, AppCopy> = {
       noDate: "Tarih yok",
       operationFailed: "İşlem tamamlanamadı. Lütfen tekrar dene.",
       premium: "Premium",
+      retry: "Tekrar Dene",
       task: "Görev"
     },
     legal: {
@@ -239,7 +241,7 @@ export const translations: Record<Language, AppCopy> = {
       restoreTitle: "Geri yükleme yakında",
       subscriptionTerms: "Abonelik Şartları",
       support: "Destek",
-      termsOfUse: "Kullanım Şartları",
+      termsOfUse: "Kullanım Şartları (EULA)",
       title: "Yasal"
     },
     tabs: {
@@ -343,13 +345,13 @@ export const translations: Record<Language, AppCopy> = {
       activeBadge: "Aktif",
       loadingPlans: "RevenueCat planları yükleniyor.",
       revenueCatMissingTitle: "RevenueCat yapılandırması eksik",
-      revenueCatMissingBody: "Satın alma için RevenueCat iOS/Android public API key değerlerini .env dosyasına eklemen gerekiyor.",
+      revenueCatMissingBody: "Satın alma için RevenueCat public API key değerlerini yapılandırman gerekiyor.",
       plansUnavailableTitle: "Plan bulunamadı",
       plansUnavailableBody: "RevenueCat offering içinde aylık veya yıllık paket bulunamadı. Dashboard ürün ve entitlement ayarlarını kontrol et.",
       purchaseSuccessTitle: "Premium aktif",
       purchaseSuccessBody: "Satın alma tamamlandı ve Premium durumun güncellendi.",
       purchaseErrorTitle: "Satın alma tamamlanamadı",
-      purchaseErrorBody: "RevenueCat satın alma akışında hata oluştu. Ürünlerin App Store Connect/Google Play ve RevenueCat üzerinde aktif olduğundan emin ol.",
+      purchaseErrorBody: "RevenueCat satın alma akışında hata oluştu. Ürünlerin App Store Connect ve RevenueCat üzerinde aktif olduğundan emin ol.",
       restoreSuccessTitle: "Satın alımlar geri yüklendi",
       restoreSuccessBody: "Premium aboneliğin bulundu ve hesabına işlendi.",
       restoreInactiveTitle: "Aktif abonelik bulunamadı",
@@ -445,6 +447,7 @@ export const translations: Record<Language, AppCopy> = {
       noDate: "No date",
       operationFailed: "The action could not be completed. Please try again.",
       premium: "Premium",
+      retry: "Try Again",
       task: "Task"
     },
     legal: {
@@ -460,7 +463,7 @@ export const translations: Record<Language, AppCopy> = {
       restoreTitle: "Restore coming soon",
       subscriptionTerms: "Subscription Terms",
       support: "Support",
-      termsOfUse: "Terms of Use",
+      termsOfUse: "Terms of Use (EULA)",
       title: "Legal"
     },
     tabs: {
@@ -564,13 +567,13 @@ export const translations: Record<Language, AppCopy> = {
       activeBadge: "Active",
       loadingPlans: "Loading RevenueCat plans.",
       revenueCatMissingTitle: "RevenueCat configuration is missing",
-      revenueCatMissingBody: "Add the RevenueCat iOS/Android public API keys to the .env file before purchases can start.",
+      revenueCatMissingBody: "Configure the RevenueCat public API keys before purchases can start.",
       plansUnavailableTitle: "No plan found",
       plansUnavailableBody: "The RevenueCat offering does not include a monthly or yearly package. Check the dashboard products and entitlement setup.",
       purchaseSuccessTitle: "Premium active",
       purchaseSuccessBody: "The purchase is complete and your Premium status was updated.",
       purchaseErrorTitle: "Purchase could not be completed",
-      purchaseErrorBody: "RevenueCat returned an error. Make sure products are active in App Store Connect/Google Play and RevenueCat.",
+      purchaseErrorBody: "RevenueCat returned an error. Make sure products are active in App Store Connect and RevenueCat.",
       restoreSuccessTitle: "Purchases restored",
       restoreSuccessBody: "Your Premium subscription was found and applied to your account.",
       restoreInactiveTitle: "No active subscription found",

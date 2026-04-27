@@ -13,11 +13,13 @@
         {
           "defaultChannel": "taskagent-reminders"
         }
-      ]
+      ],
+      "react-native-purchases"
     ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.taskagent.mobile",
+      "buildNumber": "3",
       "config": {
         "usesNonExemptEncryption": false
       },
