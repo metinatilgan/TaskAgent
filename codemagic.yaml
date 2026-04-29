@@ -1,0 +1,67 @@
+workflows:
+  ios-app-store:
+    name: TaskAgent iOS App Store
+    max_build_duration: 120
+    instance_type: mac_mini_m2
+    environment:
+      groups:
+        - taskagent_public_env
+        - app_store_credentials
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.taskagent.mobile
+      vars:
+        APP_STORE_APPLE_ID: "6762462210"
+        BUNDLE_ID: "com.taskagent.mobile"
+        XCODE_SCHEME: "TaskAgent"
+        XCODE_WORKSPACE: "ios/TaskAgent.xcworkspace"
+    cache:
+      cache_paths:
+        - $HOME/Library/Caches/CocoaPods
+        - $CM_BUILD_DIR/node_modules
+    scripts:
+      - name: Validate required environment
+        script: |
+          set -euo pipefail
+          test -n "${EXPO_PUBLIC_FIREBASE_API_KEY:-}"
+          test -n "${EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN:-}"
+          test -n "${EXPO_PUBLIC_FIREBASE_PROJECT_ID:-}"
+          test -n "${EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID:-}"
+          test -n "${EXPO_PUBLIC_FIREBASE_APP_ID:-}"
+          test -n "${EXPO_PUBLIC_REVENUECAT_IOS_API_KEY:-}"
+          test -n "${EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID:-}"
+          test -n "${APP_STORE_CONNECT_PRIVATE_KEY:-}"
+          test -n "${APP_STORE_CONNECT_KEY_IDENTIFIER:-}"
+          test -n "${APP_STORE_CONNECT_ISSUER_ID:-}"
+          test -n "${CERTIFICATE_PRIVATE_KEY:-}"
+      - name: Install npm dependencies
+        script: |
+          npm ci
+      - name: Install CocoaPods dependencies
+        script: |
+          cd ios
+          pod install
+      - name: Increment iOS build number from App Store Connect
+        script: |
+          set -euo pipefail
+          cd "$CM_BUILD_DIR/ios"
+          LATEST_BUILD_NUMBER=$(app-store-connect get-latest-app-store-build-number "$APP_STORE_APPLE_ID" || echo 3)
+          agvtool new-version -all $((LATEST_BUILD_NUMBER + 1))
+      - name: Apply provisioning profiles
+        script: |
+          xcode-project use-profiles
+      - name: Build signed IPA
+        script: |
+          xcode-project build-ipa \
+            --workspace "$CM_BUILD_DIR/$XCODE_WORKSPACE" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.dSYM
+    publishing:
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID

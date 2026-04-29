@@ -13,7 +13,7 @@ export interface PremiumStatus {
   managementUrl: string | null;
 }
 
-const ENTITLEMENT_ID = process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID || "premium";
+const ENTITLEMENT_ID = process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID || "TaskAgent Pro";
 
 const revenueCatApiKey = () => {
   if (Platform.OS === "ios") {
