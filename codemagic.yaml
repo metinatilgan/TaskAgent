@@ -30,6 +30,7 @@ workflows:
           test -n "${APP_STORE_CONNECT_PRIVATE_KEY:-}"
           test -n "${APP_STORE_CONNECT_KEY_IDENTIFIER:-}"
           test -n "${APP_STORE_CONNECT_ISSUER_ID:-}"
+          test -n "${CERTIFICATE_PRIVATE_KEY:-}"
       - name: Install npm dependencies
         script: |
           npm ci
@@ -44,7 +45,11 @@ workflows:
         script: |
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
-            --create
+            --create \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key @env:APP_STORE_CONNECT_PRIVATE_KEY \
+            --certificate-key @env:CERTIFICATE_PRIVATE_KEY
       - name: Add signing certificates to keychain
         script: |
           keychain add-certificates
