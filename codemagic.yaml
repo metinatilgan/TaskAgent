@@ -6,7 +6,7 @@ workflows:
     environment:
       groups:
         - taskagent_public_env
-        - app_store_credentials
+        - app_store_credentials_team
       vars:
         APP_STORE_APPLE_ID: "6762462210"
         BUNDLE_ID: "com.taskagent.mobile"
@@ -30,7 +30,6 @@ workflows:
           test -n "${APP_STORE_CONNECT_PRIVATE_KEY:-}"
           test -n "${APP_STORE_CONNECT_KEY_IDENTIFIER:-}"
           test -n "${APP_STORE_CONNECT_ISSUER_ID:-}"
-          test -n "${CERTIFICATE_PRIVATE_KEY:-}"
       - name: Install npm dependencies
         script: |
           npm ci
