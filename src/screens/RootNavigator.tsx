@@ -615,38 +615,51 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
     setLoadingPlans(true);
     setPremiumNotice(null);
 
-    try {
-      const [nextOffering, customerInfo] = await Promise.all([getRevenueCatOffering(user.uid), getRevenueCatCustomerInfo(user.uid)]);
+    // Load offering and customer info independently so a failure in one (e.g. a
+    // network hang on getCustomerInfo) cannot leave the paywall stuck showing
+    // a loading spinner forever — the issue Apple flagged in the May 2 review.
+    const [offeringResult, customerInfoResult] = await Promise.allSettled([
+      getRevenueCatOffering(user.uid),
+      getRevenueCatCustomerInfo(user.uid)
+    ]);
 
-      if (!mountedRef.current) {
-        return;
-      }
+    if (!mountedRef.current) {
+      return;
+    }
 
+    let offeringNotice: string | null = null;
+
+    if (offeringResult.status === "fulfilled") {
+      const nextOffering = offeringResult.value;
       setOffering(nextOffering);
+      const hasPackages = Boolean(nextOffering?.monthly || nextOffering?.annual || nextOffering?.availablePackages.length);
+      if (!hasPackages) {
+        offeringNotice = copy.premium.plansUnavailableBody;
+      }
+    } else {
+      console.warn("RevenueCat offering load failed.", offeringResult.reason);
+      offeringNotice = copy.premium.purchaseErrorBody;
+    }
 
-      if (customerInfo) {
-        const status = premiumStatusFromCustomerInfo(customerInfo);
+    if (customerInfoResult.status === "fulfilled" && customerInfoResult.value) {
+      try {
+        const status = premiumStatusFromCustomerInfo(customerInfoResult.value);
         setManagementUrl(status.managementUrl);
         await updateProfile({
           isPremium: status.isPremium,
           premiumPlan: status.premiumPlan,
           premiumExpiresAt: status.premiumExpiresAt
         });
+      } catch (cause) {
+        console.warn("Applying customerInfo failed.", cause);
       }
+    } else if (customerInfoResult.status === "rejected") {
+      console.warn("RevenueCat customer info load failed.", customerInfoResult.reason);
+    }
 
-      const hasPackages = Boolean(nextOffering?.monthly || nextOffering?.annual || nextOffering?.availablePackages.length);
-      if (!hasPackages) {
-        setPremiumNotice(copy.premium.plansUnavailableBody);
-      }
-    } catch (cause) {
-      console.warn("RevenueCat plans could not be loaded.", cause);
-      if (mountedRef.current) {
-        setPremiumNotice(copy.premium.purchaseErrorBody);
-      }
-    } finally {
-      if (mountedRef.current) {
-        setLoadingPlans(false);
-      }
+    if (mountedRef.current) {
+      setPremiumNotice(offeringNotice);
+      setLoadingPlans(false);
     }
   }, [
     copy.premium.plansUnavailableBody,

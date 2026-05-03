@@ -32,6 +32,25 @@ let activeAppUserId: string | null = null;
 
 export const isRevenueCatConfiguredForPlatform = () => Boolean(revenueCatApiKey());
 
+const NETWORK_TIMEOUT_MS = 15_000;
+
+class RevenueCatTimeoutError extends Error {
+  constructor(label: string, ms: number) {
+    super(`${label} did not complete in ${ms}ms`);
+    this.name = "RevenueCatTimeoutError";
+  }
+}
+
+const withTimeout = <T>(promise: Promise<T>, label: string, ms: number = NETWORK_TIMEOUT_MS): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timeoutId)),
+    new Promise<T>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new RevenueCatTimeoutError(label, ms)), ms);
+    })
+  ]);
+};
+
 export async function configureRevenueCat(appUserId?: string | null) {
   const apiKey = revenueCatApiKey();
 
@@ -46,13 +65,18 @@ export async function configureRevenueCat(appUserId?: string | null) {
     });
     configured = true;
     activeAppUserId = appUserId || null;
-    await Purchases.setLogLevel(__DEV__ ? LOG_LEVEL.VERBOSE : LOG_LEVEL.WARN);
+    // Always log at INFO so production logs (Apple review crash report / Console.app) capture RevenueCat behaviour.
+    await Purchases.setLogLevel(__DEV__ ? LOG_LEVEL.VERBOSE : LOG_LEVEL.INFO);
     return true;
   }
 
   if (appUserId && activeAppUserId !== appUserId) {
-    await Purchases.logIn(appUserId);
-    activeAppUserId = appUserId;
+    try {
+      await withTimeout(Purchases.logIn(appUserId), "Purchases.logIn");
+      activeAppUserId = appUserId;
+    } catch (cause) {
+      console.warn("RevenueCat logIn failed; continuing with existing user.", cause);
+    }
   }
 
   return true;
@@ -65,7 +89,7 @@ export async function getRevenueCatOffering(appUserId?: string | null): Promise<
     return null;
   }
 
-  const offerings = await Purchases.getOfferings();
+  const offerings = await withTimeout(Purchases.getOfferings(), "Purchases.getOfferings");
   if (offerings.current) {
     return offerings.current;
   }
@@ -84,8 +108,11 @@ export async function getRevenueCatCustomerInfo(appUserId?: string | null) {
     return null;
   }
 
-  return Purchases.getCustomerInfo();
+  return withTimeout(Purchases.getCustomerInfo(), "Purchases.getCustomerInfo");
 }
+
+export const isRevenueCatTimeoutError = (cause: unknown): cause is RevenueCatTimeoutError =>
+  cause instanceof RevenueCatTimeoutError;
 
 export async function purchaseRevenueCatPackage(appUserId: string, premiumPackage: PurchasesPackage) {
   const ready = await configureRevenueCat(appUserId);
