@@ -8,3 +8,16 @@ build/
 .env
 .env.*
 !.env.example
+
+# Local Claude Code state (per-machine, not project-shared)
+.claude/
+
+# Code-signing material — NEVER commit private keys / certs to the repo.
+# Distribution cert lives in Codemagic env (CERTIFICATE_PRIVATE_KEY) only.
+*.pem
+*.p12
+*.p8
+*.cer
+*.csr
+*.key
+*.mobileprovision
