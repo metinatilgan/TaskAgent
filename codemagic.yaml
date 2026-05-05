@@ -67,6 +67,27 @@ workflows:
           xcode-project build-ipa \
             --workspace "$CM_BUILD_DIR/$XCODE_WORKSPACE" \
             --scheme "$XCODE_SCHEME"
+      - name: Verify RevenueCat key is embedded in the IPA bundle
+        script: |
+          set -euo pipefail
+          # Fail the build if the RevenueCat iOS API key did not survive
+          # Metro's "Bundle React Native code and images" phase. This guards
+          # against silent env-var dropouts that would ship an IPA whose
+          # paywall can never load offerings (Apple May 2 / May 5 reject).
+          IPA_PATH=$(ls "$CM_BUILD_DIR"/build/ios/ipa/*.ipa | head -n1)
+          test -n "$IPA_PATH"
+          WORK=$(mktemp -d)
+          unzip -q "$IPA_PATH" -d "$WORK"
+          BUNDLE=$(find "$WORK/Payload" -name "main.jsbundle" -print -quit)
+          test -n "$BUNDLE"
+          if ! grep -q "$EXPO_PUBLIC_REVENUECAT_IOS_API_KEY" "$BUNDLE"; then
+            echo "ERROR: RevenueCat iOS API key not found in main.jsbundle." >&2
+            echo "       The paywall would render 'Loading RevenueCat plans' forever." >&2
+            rm -rf "$WORK"
+            exit 1
+          fi
+          echo "OK: RevenueCat iOS API key is embedded in the bundle."
+          rm -rf "$WORK"
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log

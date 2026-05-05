@@ -595,69 +595,103 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
     price: plan.package?.product.priceString || plan.price
   }));
 
-  useEffect(
-    () => () => {
+  // Mount state. Set to true on every (re)mount so that a previous unmount
+  // cannot leave us stuck thinking we're unmounted forever.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
       mountedRef.current = false;
-    },
-    []
-  );
+    };
+  }, []);
+
+  // Hard fallback: regardless of any upstream bug — sync throw, native module
+  // hang, missing timeout — the spinner can never persist longer than this.
+  // Apple's May 5 reject specifically called out an "indefinite" loading
+  // message, so we guarantee a maximum lifetime for the loading state in the
+  // UI itself, independent of RevenueCat.
+  const HARD_LOADING_TIMEOUT_MS = 10_000;
+  useEffect(() => {
+    if (!loadingPlans) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      if (!mountedRef.current) {
+        return;
+      }
+      setLoadingPlans(false);
+      setPremiumNotice((current) => current || copy.premium.plansUnavailableBody);
+    }, HARD_LOADING_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [loadingPlans, copy.premium.plansUnavailableBody]);
 
   const loadRevenueCat = useCallback(async () => {
     if (!revenueCatConfigured) {
       setPremiumNotice(copy.premium.revenueCatMissingBody);
+      setLoadingPlans(false);
       return;
     }
 
     if (!user || user.isDemo) {
+      setLoadingPlans(false);
       return;
     }
 
     setLoadingPlans(true);
     setPremiumNotice(null);
 
-    // Load offering and customer info independently so a failure in one (e.g. a
-    // network hang on getCustomerInfo) cannot leave the paywall stuck showing
-    // a loading spinner forever — the issue Apple flagged in the May 2 review.
-    const [offeringResult, customerInfoResult] = await Promise.allSettled([
-      getRevenueCatOffering(user.uid),
-      getRevenueCatCustomerInfo(user.uid)
-    ]);
-
-    if (!mountedRef.current) {
-      return;
-    }
-
     let offeringNotice: string | null = null;
 
-    if (offeringResult.status === "fulfilled") {
-      const nextOffering = offeringResult.value;
-      setOffering(nextOffering);
-      const hasPackages = Boolean(nextOffering?.monthly || nextOffering?.annual || nextOffering?.availablePackages.length);
-      if (!hasPackages) {
-        offeringNotice = copy.premium.plansUnavailableBody;
+    try {
+      // Load offering and customer info independently so a failure in one
+      // (e.g. a network hang on getCustomerInfo) cannot leave the paywall
+      // stuck showing a loading spinner forever — the issue Apple flagged
+      // in the May 2 and May 5 reviews.
+      const [offeringResult, customerInfoResult] = await Promise.allSettled([
+        getRevenueCatOffering(user.uid),
+        getRevenueCatCustomerInfo(user.uid)
+      ]);
+
+      if (offeringResult.status === "fulfilled") {
+        const nextOffering = offeringResult.value;
+        if (mountedRef.current) {
+          setOffering(nextOffering);
+        }
+        const hasPackages = Boolean(
+          nextOffering?.monthly || nextOffering?.annual || nextOffering?.availablePackages.length
+        );
+        if (!hasPackages) {
+          offeringNotice = copy.premium.plansUnavailableBody;
+        }
+      } else {
+        console.warn("RevenueCat offering load failed.", offeringResult.reason);
+        offeringNotice = copy.premium.purchaseErrorBody;
       }
-    } else {
-      console.warn("RevenueCat offering load failed.", offeringResult.reason);
+
+      if (customerInfoResult.status === "fulfilled" && customerInfoResult.value) {
+        try {
+          const status = premiumStatusFromCustomerInfo(customerInfoResult.value);
+          if (mountedRef.current) {
+            setManagementUrl(status.managementUrl);
+          }
+          await updateProfile({
+            isPremium: status.isPremium,
+            premiumPlan: status.premiumPlan,
+            premiumExpiresAt: status.premiumExpiresAt
+          });
+        } catch (cause) {
+          console.warn("Applying customerInfo failed.", cause);
+        }
+      } else if (customerInfoResult.status === "rejected") {
+        console.warn("RevenueCat customer info load failed.", customerInfoResult.reason);
+      }
+    } catch (cause) {
+      // Belt-and-suspenders. Promise.allSettled never rejects, but if any
+      // synchronous throw slips through we still terminate the loading state.
+      console.warn("loadRevenueCat unexpected failure.", cause);
       offeringNotice = copy.premium.purchaseErrorBody;
-    }
-
-    if (customerInfoResult.status === "fulfilled" && customerInfoResult.value) {
-      try {
-        const status = premiumStatusFromCustomerInfo(customerInfoResult.value);
-        setManagementUrl(status.managementUrl);
-        await updateProfile({
-          isPremium: status.isPremium,
-          premiumPlan: status.premiumPlan,
-          premiumExpiresAt: status.premiumExpiresAt
-        });
-      } catch (cause) {
-        console.warn("Applying customerInfo failed.", cause);
-      }
-    } else if (customerInfoResult.status === "rejected") {
-      console.warn("RevenueCat customer info load failed.", customerInfoResult.reason);
-    }
-
-    if (mountedRef.current) {
+    } finally {
+      // Always clear the spinner — even if the component unmounted. The next
+      // mount will read the updated state, not a stale `true`.
       setPremiumNotice(offeringNotice);
       setLoadingPlans(false);
     }

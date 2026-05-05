@@ -13,7 +13,16 @@ export interface PremiumStatus {
   managementUrl: string | null;
 }
 
-const ENTITLEMENT_ID = process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID || "TaskAgent Pro";
+// Allow several historically-used entitlement lookup keys to match.
+// RevenueCat dashboard currently uses "TaskAgent Pro" (with space). The
+// env override is the source of truth, but we also fall back to known
+// historical aliases so a config drift between Codemagic env and the
+// RevenueCat project cannot silently break premium activation.
+const PRIMARY_ENTITLEMENT_ID = process.env.EXPO_PUBLIC_REVENUECAT_ENTITLEMENT_ID || "TaskAgent Pro";
+const ENTITLEMENT_ID = PRIMARY_ENTITLEMENT_ID;
+const ENTITLEMENT_LOOKUP_KEYS = Array.from(
+  new Set([PRIMARY_ENTITLEMENT_ID, "TaskAgent Pro", "premium", "Premium", "pro", "Pro"])
+);
 
 const revenueCatApiKey = () => {
   if (Platform.OS === "ios") {
@@ -32,7 +41,12 @@ let activeAppUserId: string | null = null;
 
 export const isRevenueCatConfiguredForPlatform = () => Boolean(revenueCatApiKey());
 
-const NETWORK_TIMEOUT_MS = 15_000;
+// Apple reviewers do not wait 15 seconds. Tighten the upper bound so a
+// silent SDK hang surfaces as a retryable error well within the patience
+// window of an automated review pass on iPad Air M3 / iPadOS 26.
+const NETWORK_TIMEOUT_MS = 8_000;
+const CONFIGURE_TIMEOUT_MS = 8_000;
+const LOG_LEVEL_TIMEOUT_MS = 2_000;
 
 class RevenueCatTimeoutError extends Error {
   constructor(label: string, ms: number) {
@@ -51,22 +65,39 @@ const withTimeout = <T>(promise: Promise<T>, label: string, ms: number = NETWORK
   ]);
 };
 
-export async function configureRevenueCat(appUserId?: string | null) {
-  const apiKey = revenueCatApiKey();
-
-  if (!apiKey) {
-    return false;
-  }
-
+// `Purchases.configure` is documented as synchronous, but on real devices the
+// native module bootstraps StoreKit 2 lazily. Wrapping the entire configure
+// flow (sync configure call + log-level await + optional logIn) in a single
+// timeout guarantees the rest of the app never blocks on it.
+const configureInternal = async (apiKey: string, appUserId: string | null) => {
   if (!configured) {
-    Purchases.configure({
-      apiKey,
-      appUserID: appUserId || undefined
-    });
+    try {
+      Purchases.configure({
+        apiKey,
+        appUserID: appUserId || undefined
+      });
+    } catch (cause) {
+      // A sync throw at configure time would otherwise bubble into the
+      // paywall as an unhandled rejection and freeze the loading state.
+      console.warn("Purchases.configure threw synchronously.", cause);
+      return false;
+    }
+
     configured = true;
-    activeAppUserId = appUserId || null;
-    // Always log at INFO so production logs (Apple review crash report / Console.app) capture RevenueCat behaviour.
-    await Purchases.setLogLevel(__DEV__ ? LOG_LEVEL.VERBOSE : LOG_LEVEL.INFO);
+    activeAppUserId = appUserId;
+
+    // setLogLevel returning a Promise that never resolves is the most likely
+    // cause of the May 5 "infinite spinner" report. Treat it as best-effort.
+    try {
+      await withTimeout(
+        Promise.resolve(Purchases.setLogLevel(__DEV__ ? LOG_LEVEL.VERBOSE : LOG_LEVEL.INFO)),
+        "Purchases.setLogLevel",
+        LOG_LEVEL_TIMEOUT_MS
+      );
+    } catch (cause) {
+      console.warn("Purchases.setLogLevel did not complete; continuing.", cause);
+    }
+
     return true;
   }
 
@@ -80,6 +111,25 @@ export async function configureRevenueCat(appUserId?: string | null) {
   }
 
   return true;
+};
+
+export async function configureRevenueCat(appUserId?: string | null) {
+  const apiKey = revenueCatApiKey();
+
+  if (!apiKey) {
+    return false;
+  }
+
+  try {
+    return await withTimeout(
+      configureInternal(apiKey, appUserId || null),
+      "configureRevenueCat",
+      CONFIGURE_TIMEOUT_MS
+    );
+  } catch (cause) {
+    console.warn("configureRevenueCat timed out or threw; continuing without configure.", cause);
+    return false;
+  }
 }
 
 export async function getRevenueCatOffering(appUserId?: string | null): Promise<PurchasesOffering | null> {
@@ -169,8 +219,15 @@ const planForProductIdentifier = (productIdentifier: string | null | undefined):
   return null;
 };
 
-const activePremiumEntitlement = (customerInfo: CustomerInfo): PurchasesEntitlementInfo | null =>
-  customerInfo.entitlements.active[ENTITLEMENT_ID] || null;
+const activePremiumEntitlement = (customerInfo: CustomerInfo): PurchasesEntitlementInfo | null => {
+  for (const key of ENTITLEMENT_LOOKUP_KEYS) {
+    const found = customerInfo.entitlements.active[key];
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+};
 
 export function premiumStatusFromCustomerInfo(customerInfo: CustomerInfo, fallbackPlan: PremiumPlanKey | null = null): PremiumStatus {
   const entitlement = activePremiumEntitlement(customerInfo);
