@@ -73,6 +73,24 @@ const authErrorMessage = (cause: unknown, fallback: string) => {
 };
 
 const firebaseRequiredMessage = "Bu giriş yöntemi için Firebase anahtarları ve ilgili provider etkin olmalı.";
+const ACCOUNT_DELETION_TIMEOUT_MS = 15_000;
+
+class AuthOperationTimeoutError extends Error {
+  constructor(label: string, ms: number) {
+    super(`${label} did not complete in ${ms}ms`);
+    this.name = "AuthOperationTimeoutError";
+  }
+}
+
+const withTimeout = <T,>(promise: Promise<T>, label: string, ms: number = ACCOUNT_DELETION_TIMEOUT_MS): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    promise.finally(() => clearTimeout(timeoutId)),
+    new Promise<T>((_, reject) => {
+      timeoutId = setTimeout(() => reject(new AuthOperationTimeoutError(label, ms)), ms);
+    })
+  ]);
+};
 
 const isFirestoreOfflineError = (cause: unknown) =>
   cause instanceof FirebaseError &&
@@ -351,9 +369,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
         try {
           const credential = EmailAuthProvider.credential(currentUser.email, password);
-          await reauthenticateWithCredential(currentUser, credential);
-          await deleteFirestoreAccountData(currentUser.uid);
-          await deleteUser(currentUser);
+          await withTimeout(
+            reauthenticateWithCredential(currentUser, credential),
+            "reauthenticateWithCredential"
+          );
+          await withTimeout(
+            deleteFirestoreAccountData(currentUser.uid),
+            "deleteFirestoreAccountData"
+          );
+          await withTimeout(deleteUser(currentUser), "deleteUser");
           setUser(null);
           return { ok: true };
         } catch (cause) {

@@ -47,6 +47,8 @@ export const isRevenueCatConfiguredForPlatform = () => Boolean(revenueCatApiKey(
 const NETWORK_TIMEOUT_MS = 8_000;
 const CONFIGURE_TIMEOUT_MS = 8_000;
 const LOG_LEVEL_TIMEOUT_MS = 2_000;
+const PURCHASE_TIMEOUT_MS = 45_000;
+const RESTORE_TIMEOUT_MS = 20_000;
 
 class RevenueCatTimeoutError extends Error {
   constructor(label: string, ms: number) {
@@ -171,7 +173,11 @@ export async function purchaseRevenueCatPackage(appUserId: string, premiumPackag
     throw new Error("RevenueCat is not configured for this platform.");
   }
 
-  return Purchases.purchasePackage(premiumPackage);
+  // Purchasing is user-interactive, so it gets a much larger timeout than
+  // background offering/customer-info fetches. The goal is only to prevent
+  // a native StoreKit / RevenueCat deadlock from leaving the CTA spinning
+  // forever on TestFlight builds.
+  return withTimeout(Purchases.purchasePackage(premiumPackage), "Purchases.purchasePackage", PURCHASE_TIMEOUT_MS);
 }
 
 export async function restoreRevenueCatPurchases(appUserId: string) {
@@ -181,7 +187,7 @@ export async function restoreRevenueCatPurchases(appUserId: string) {
     throw new Error("RevenueCat is not configured for this platform.");
   }
 
-  return Purchases.restorePurchases();
+  return withTimeout(Purchases.restorePurchases(), "Purchases.restorePurchases", RESTORE_TIMEOUT_MS);
 }
 
 export const isRevenueCatPurchaseCancelled = (cause: unknown) => {

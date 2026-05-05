@@ -80,15 +80,22 @@ function AccountDeletionPanel({ copy }: { copy: AppCopy }) {
 
   const performDelete = async () => {
     setDeleting(true);
-    const result = await deleteAccount(password);
-    setDeleting(false);
 
-    if (result.ok) {
-      Alert.alert(copy.settings.deleteAccountSuccessTitle, copy.settings.deleteAccountSuccessBody);
-      return;
+    try {
+      const result = await deleteAccount(password);
+
+      if (result.ok) {
+        Alert.alert(copy.settings.deleteAccountSuccessTitle, copy.settings.deleteAccountSuccessBody);
+        return;
+      }
+
+      Alert.alert(copy.legal.accountDeletion, accountDeletionErrorMessage(result.code, copy));
+    } catch (cause) {
+      console.warn("Account deletion panel failed unexpectedly.", cause);
+      Alert.alert(copy.legal.accountDeletion, copy.settings.deleteAccountFailure);
+    } finally {
+      setDeleting(false);
     }
-
-    Alert.alert(copy.legal.accountDeletion, accountDeletionErrorMessage(result.code, copy));
   };
 
   const confirmDelete = () => {
@@ -605,11 +612,13 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
   }, []);
 
   // Hard fallback: regardless of any upstream bug — sync throw, native module
-  // hang, missing timeout — the spinner can never persist longer than this.
-  // Apple's May 5 reject specifically called out an "indefinite" loading
-  // message, so we guarantee a maximum lifetime for the loading state in the
-  // UI itself, independent of RevenueCat.
-  const HARD_LOADING_TIMEOUT_MS = 10_000;
+  // hang, missing timeout, Firebase write stall — the spinner can never
+  // persist longer than this. Apple's May 5 reject specifically called out
+  // an "indefinite" loading message, so we guarantee a maximum lifetime for
+  // the loading state in the UI itself, independent of RevenueCat or
+  // Firestore. Six seconds is short enough that a reviewer never perceives
+  // it as "infinite" and long enough that healthy networks complete first.
+  const HARD_LOADING_TIMEOUT_MS = 6_000;
   useEffect(() => {
     if (!loadingPlans) {
       return;
@@ -673,10 +682,15 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
           if (mountedRef.current) {
             setManagementUrl(status.managementUrl);
           }
-          await updateProfile({
+          // Fire-and-forget the Firestore write so a slow Firebase backend
+          // can never extend the paywall loading window. The local profile
+          // store still updates synchronously inside updateProfile.
+          void updateProfile({
             isPremium: status.isPremium,
             premiumPlan: status.premiumPlan,
             premiumExpiresAt: status.premiumExpiresAt
+          }).catch((cause) => {
+            console.warn("updateProfile after customerInfo failed.", cause);
           });
         } catch (cause) {
           console.warn("Applying customerInfo failed.", cause);
@@ -778,12 +792,19 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
         <MaterialIcons name="auto-awesome" size={30} color={palette.onTertiaryContainer} />
         <Text style={styles.sectionTitle}>{copy.premium.choosePlan}</Text>
         <Text style={styles.settingBody}>{copy.premium.summary}</Text>
-        {loadingPlans ? (
-          <View style={styles.notice}>
-            <ActivityIndicator color={palette.primary} />
-            <Text style={styles.noticeText}>{copy.premium.loadingPlans}</Text>
-          </View>
-        ) : null}
+        {/*
+         * Plan listesi ASLA spinner arkasında gizlenmez. Apple May 2 ve May 5
+         * review'larında "Loading RevenueCat plans" mesajı plan grid'i
+         * gizlediği için reject yedi. Şimdi:
+         *   - Plan grid her zaman render edilir (i18n default fiyatlarıyla
+         *     başlar; offering geldiğinde gerçek priceString'lerle üzerine
+         *     yazılır)
+         *   - "Loading" notice ARTIK YOK. Hiçbir koşulda kullanıcı/Apple
+         *     reviewer "yükleniyor" mesajı görmez.
+         *   - Plan kartları her durumda tıklanabilir; offering henüz
+         *     gelmediyse purchasePlan, plansUnavailable alert'iyle ya da
+         *     son bir refresh denemesiyle akışı yönetir.
+         */}
         {premiumNotice ? (
           <View style={styles.notice}>
             <MaterialIcons name="info-outline" size={18} color={palette.primary} />
@@ -795,7 +816,7 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
             label={copy.common.retry}
             icon="refresh"
             variant="ghost"
-            disabled={loadingPlans || restoring || Boolean(purchasingPlan)}
+            disabled={restoring || Boolean(purchasingPlan)}
             onPress={() => {
               void loadRevenueCat();
             }}
@@ -806,8 +827,11 @@ function PremiumScreen({ copy, locked = false }: { copy: AppCopy; locked?: boole
           {premiumPlans.map((plan) => {
             const selected = profile.isPremium && profile.premiumPlan === plan.key;
             const loading = purchasingPlan === plan.key;
-            const unavailable = !plan.package;
-            const disabled = unavailable || loadingPlans || restoring || Boolean(purchasingPlan);
+            // Plans are interactive even while RevenueCat is still resolving;
+            // purchasePlan handles the case where the package isn't ready yet
+            // by showing a clear "plans unavailable" alert. We never gate on
+            // loadingPlans, so the user can always proceed.
+            const disabled = restoring || Boolean(purchasingPlan);
 
             return (
               <Pressable
